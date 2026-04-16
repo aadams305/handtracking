@@ -1,0 +1,14 @@
+Metadata-Version: 2.4
+Name: handtracking
+Version: 0.1.0
+Summary: 11-point hand tracking (MobileNetV4 + SimCC)
+Requires-Python: >=3.10
+Requires-Dist: mediapipe>=0.10.14
+Requires-Dist: opencv-python-headless>=4.8.0
+Requires-Dist: numpy>=1.24.0
+Requires-Dist: torch>=2.1.0
+Requires-Dist: torchvision>=0.16.0
+Requires-Dist: Pillow>=10.0.0
+Requires-Dist: tqdm>=4.66.0
+Requires-Dist: onnx>=1.15.0
+Requires-Dist: onnxsim>=0.4.33

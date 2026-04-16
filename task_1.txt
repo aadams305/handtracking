@@ -1,0 +1,40 @@
+MISSION: High-FPS 10-Point Hand Tracking (MobileNetV4 + SimCC)
+Goal: Deploy a specialized, single-stage hand tracker optimized for SBCs (Orange Pi 5 Max) and Android NPUs.
+🤖 Agent Instructions
+Mode: Use Planning mode for Phase 1-3; use Turbo terminal mode for Phase 4.
+Constraints: Avoid separate .css/.js files; keep logic modular. Use NCNN for SBC deployment.
+Validation: Every phase must end with a verification task before proceeding.
+📂 Phase 1: Data Distillation (Context Engineering)
+[ ] Topology Setup: Map 21-point MediaPipe indices to 10 points:
+0 (Wrist), 5,9,13,17 (MCPs), 4,8,12,16,20 (Tips).
+[ ] Label Generation: Script a "Teacher" pipeline using MediaPipe Python (Full) to label the FreiHAND or InterHand2.6M dataset.
+[ ] Augmentation Pipeline: - [ ] Add MotionBlur (Simulate high-speed movement).
+[ ] Add 180deg Rotation (Ensure orientation robustness).
+[ ] Add Cutout (Simulate finger-on-finger occlusion).
+[ ] Verification: Generate a samples.png showing 10 images with 10-point overlays from the distilled dataset.
+🧠 Phase 2: Model Architecture (The "Regressional Student")
+[ ] Backbone Implementation: Build MobileNetV4-Conv-Small (Pure Conv blocks only).
+[ ] SimCC Head: - [ ] Implement Horizontal (X) and Vertical (Y) 1D classification branches.
+[ ] Set expansion factor  (320 bins for 160px input).
+[ ] Loss Function: Implement Adaptive Wing Loss + Label Smoothing for SimCC bins.
+[ ] Verification: Run a single forward pass and print output tensor shapes to ensure (11, 320) dimensions.
+🚀 Phase 3: Training & Cross-Platform Conversion
+[ ] Training Script: Set up a training loop with an exponential learning rate decay.
+[ ] Quantization: Apply Quantization-Aware Training (QAT) for INT8 targets.
+[ ] ONNX Export: Export with fixed input size [1, 3, 160, 160].
+[ ] Framework Conversion:
+[ ] Android: Convert to .tflite or .dlc (SNPE).
+[ ] SBC: Convert to .param and .bin using onnx2ncnn.
+[ ] Verification: Run ncnn-optimize and report the final model size (Target: <5MB).
+🛠️ Phase 4: Native Deployment (C++/NCNN)
+[ ] Environment Setup: Build NCNN with WITH_OPENMP=ON.
+[ ] High-Speed Pipeline:
+[ ] Thread A: 90Hz Camera capture (V4L2) + Letterbox resize.
+[ ] Thread B: NCNN Inference bound to 4 cores.
+[ ] Filtering: Implement a 1€ Filter class in C++.
+[ ] Verification: Run the binary on target hardware and log inference_time_ms (Target: <4ms on Pi 5).
+📐 Phase 5: 3D Pose & PnP Solve
+[ ] Geometry: Calculate Normal = (Index_MCP - Wrist) x (Pinky_MCP - Wrist).
+[ ] PnP Implementation: Use cv::solvePnP with Wrist + 4 MCPs as the rigid base.
+[ ] Kinematic Logic: Compute relative angles for splay/curl from the PnP-stabilized plane.
+[ ] Verification: Visualize the 3D hand orientation in a simple window or console log.

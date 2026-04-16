@@ -1,0 +1,14 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+checkpoints/
+*.pt
+*.onnx
+*.bin
+*.param
+*.tflite
+*.dlc
+data/distilled/
+cpp/build/
+.venv/
+venv/

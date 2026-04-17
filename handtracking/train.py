@@ -53,6 +53,7 @@ def main() -> None:
     ap.add_argument("--qat-epochs", type=int, default=2)
     ap.add_argument("--out", type=Path, default=Path("checkpoints/hand_simcc.pt"))
     ap.add_argument("--width-mult", type=float, default=0.5)
+    ap.add_argument("--resume", action="store_true", help="Resume from latest checkpoint")
     args = ap.parse_args()
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -62,7 +63,8 @@ def main() -> None:
     loader = DataLoader(ds, batch_size=args.batch_size, shuffle=True, num_workers=0)
 
     base = HandSimCCNet(width_mult=args.width_mult).to(device)
-    loss_fn = SimCCAdaptiveWingLoss().to(device)
+    # Disable AWing loss! Soft-argmax gradients explode at random initialization on pixel-scale.
+    loss_fn = SimCCAdaptiveWingLoss(aw_weight=0.0).to(device)
 
     fp_epochs = args.epochs - args.qat_epochs if args.qat else args.epochs
     if fp_epochs < 0:
@@ -71,10 +73,37 @@ def main() -> None:
     opt = AdamW(base.parameters(), lr=args.lr, weight_decay=1e-4)
     sched = ExponentialLR(opt, gamma=args.lr_gamma)
 
-    for epoch in range(fp_epochs):
+    latest_path = args.out.with_name(args.out.stem + "_latest.pt")
+    start_epoch = 0
+
+    if args.resume and latest_path.exists():
+        print(f"Resuming from {latest_path} ...")
+        try:
+            checkpoint = torch.load(latest_path, map_location=device, weights_only=False)
+        except TypeError:
+            checkpoint = torch.load(latest_path, map_location=device)
+        base.load_state_dict(checkpoint["model"])
+        opt.load_state_dict(checkpoint["optimizer"])
+        sched.load_state_dict(checkpoint["scheduler"])
+        start_epoch = checkpoint.get("epoch", 0) + 1
+
+    for epoch in range(start_epoch, fp_epochs):
         loss = train_epoch(base, loader, loss_fn, opt, device)
         sched.step()
         print(f"epoch {epoch+1}/{args.epochs} (fp32) loss={loss:.6f} lr={sched.get_last_lr()[0]:.6f}")
+        
+        args.out.parent.mkdir(parents=True, exist_ok=True)
+        torch.save(
+            {
+                "model": base.state_dict(),
+                "optimizer": opt.state_dict(),
+                "scheduler": sched.state_dict(),
+                "epoch": epoch,
+                "width_mult": args.width_mult,
+                "qat": False
+            },
+            latest_path,
+        )
 
     model: nn.Module = base
     if args.qat and args.qat_epochs > 0:

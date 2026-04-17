@@ -18,20 +18,27 @@ class SimCCHead(nn.Module):
         super().__init__()
         self.num_joints = num_joints
         self.num_bins = num_bins
-        hidden = max(128, in_channels)
-        self.fc = nn.Sequential(
-            nn.Linear(in_channels, hidden),
-            nn.ReLU(inplace=True),
-            nn.Linear(hidden, num_joints * num_bins * 2),
+        spatial_size = (INPUT_SIZE // 32) ** 2  # 25 for a 160px input
+        
+        # Maps backbone features explicitly to spatial heatmaps per-joint without loss of local topography!
+        self.feat_conv = nn.Sequential(
+            nn.Conv2d(in_channels, num_joints, kernel_size=1, bias=False),
+            nn.BatchNorm2d(num_joints),
+            nn.ReLU(inplace=True)
         )
+        
+        # Translates coarse 5x5 spatial responses into high-resolution 1D 320 SimCC bins natively
+        self.x_proj = nn.Linear(spatial_size, num_bins)
+        self.y_proj = nn.Linear(spatial_size, num_bins)
 
     def forward(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
-        # x: [B, C, H, W] -> GAP -> [B, C]
-        z = x.mean(dim=(2, 3))
-        logits = self.fc(z)
-        b = logits.size(0)
-        logits = logits.view(b, 2, self.num_joints, self.num_bins)
-        lx, ly = logits[:, 0], logits[:, 1]
+        # x: [B, C, H, W] -> e.g., [B, 64, 5, 5]
+        b = x.size(0)
+        feat = self.feat_conv(x)  # [B, 10, 5, 5]
+        feat = feat.view(b, self.num_joints, -1)  # [B, 10, 25]
+        
+        lx = self.x_proj(feat)  # [B, 10, 320]
+        ly = self.y_proj(feat)  # [B, 10, 320]
         return lx, ly
 
 

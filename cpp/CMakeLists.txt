@@ -3,7 +3,7 @@ project(hand_ncnn_demo LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 
-find_package(OpenCV REQUIRED COMPONENTS core imgproc videoio imgcodecs)
+find_package(OpenCV REQUIRED COMPONENTS core imgproc videoio imgcodecs highgui)
 
 option(NCNN_ROOT "" "")
 if(NCNN_ROOT)

@@ -27,19 +27,30 @@ class MediaPipeTeacher:
         min_detection_confidence: float = 0.5,
         min_tracking_confidence: float = 0.5,
     ) -> None:
+        import os
+        import urllib.request
         import mediapipe as mp
+        from mediapipe.tasks import python
+        from mediapipe.tasks.python import vision
+
+        model_path = "hand_landmarker.task"
+        if not os.path.exists(model_path):
+            print(f"Downloading {model_path} for MediaPipe Tasks API...")
+            url = "https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task"
+            urllib.request.urlretrieve(url, model_path)
 
         self._mp = mp
-        self._hands = mp.solutions.hands.Hands(
-            static_image_mode=static_image_mode,
-            max_num_hands=max_num_hands,
-            model_complexity=model_complexity,
-            min_detection_confidence=min_detection_confidence,
-            min_tracking_confidence=min_tracking_confidence,
+        base_options = python.BaseOptions(model_asset_path=model_path)
+        options = vision.HandLandmarkerOptions(
+            base_options=base_options,
+            num_hands=max_num_hands,
+            min_hand_detection_confidence=min_detection_confidence,
+            min_hand_presence_confidence=min_tracking_confidence,
         )
+        self._detector = vision.HandLandmarker.create_from_options(options)
 
     def close(self) -> None:
-        self._hands.close()
+        self._detector.close()
 
     def __enter__(self) -> "MediaPipeTeacher":
         return self
@@ -52,16 +63,20 @@ class MediaPipeTeacher:
         import cv2
 
         rgb = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2RGB)
-        res = self._hands.process(rgb)
-        if not res.multi_hand_landmarks:
+        mp_image = self._mp.Image(image_format=self._mp.ImageFormat.SRGB, data=rgb)
+        res = self._detector.detect(mp_image)
+        
+        if not res.hand_landmarks:
             return TeacherResult(False, None, None)
-        hand = res.multi_hand_landmarks[0]
+
+        hand = res.hand_landmarks[0]
         handedness = None
-        if res.multi_handedness:
-            handedness = res.multi_handedness[0].classification[0].label
+        if res.handedness:
+            handedness = res.handedness[0][0].category_name
+            
         pts = np.zeros((NUM_HAND_JOINTS, 3), dtype=np.float32)
         for i, idx in enumerate(MEDIAPIPE_INDICES_10):
-            lm = hand.landmark[idx]
+            lm = hand[idx]
             pts[i, 0] = lm.x
             pts[i, 1] = lm.y
             pts[i, 2] = lm.z

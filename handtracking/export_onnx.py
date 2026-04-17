@@ -32,8 +32,12 @@ def main() -> None:
 
     dummy = torch.randn(1, 3, 160, 160)
     args.out.parent.mkdir(parents=True, exist_ok=True)
+    
+    # Pre-trace to force the legacy TorchScript exporter (bypasses broken Dynamo ONNX engine)
+    traced_model = torch.jit.trace(model, dummy)
+    
     torch.onnx.export(
-        model,
+        traced_model,
         dummy,
         str(args.out),
         input_names=["input"],

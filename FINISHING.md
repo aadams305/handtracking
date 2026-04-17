@@ -8,18 +8,18 @@ Use this file as a **progress tracker**. Commands assume the repo root is `~/han
 
 ## Prerequisites
 
-- [ ] **Disk**: room for FreiHAND (or another dataset) and distilled manifests; ONNX/NCNN artifacts are gitignored by default.
-- [ ] **Camera**: USB cam works with V4L2 (test with [camera.py](camera.py)); note the correct index if not `0` (`v4l2-ctl --list-devices` when available).
-- [ ] **Python**: 3.10+ recommended; GPU optional for training.
-- [ ] **Target board** (optional): Orange Pi 5 Max or RK3588 SBC for NCNN latency goals.
+- [x] **Disk**: room for FreiHAND (or another dataset) and distilled manifests; ONNX/NCNN artifacts are gitignored by default.
+- [x] **Camera**: USB cam works with V4L2 (test with [camera.py](camera.py)); note the correct index if not `0` (`v4l2-ctl --list-devices` when available).
+- [x] **Python**: 3.10+ recommended; GPU optional for training.
+- [x] **Target board** (optional): Orange Pi 5 Max or RK3588 SBC for NCNN latency goals.
 
 ---
 
 ## One-time setup
 
-- [ ] Create a venv (recommended): `python3 -m venv .venv && source .venv/bin/activate`
-- [ ] Install the package: `pip install -e .` **or** `pip install -r requirements.txt`
-- [ ] For faster **live student** preview on CPU: `pip install onnxruntime` (also in [requirements.txt](requirements.txt))
+- [x] Create a venv (recommended): `python3 -m venv .venv && source .venv/bin/activate`
+- [x] Install the package: `pip install -e .` **or** `pip install -r requirements.txt`
+- [x] For faster **live student** preview on CPU: `pip install onnxruntime` (also in [requirements.txt](requirements.txt))
 
 ---
 
@@ -35,8 +35,8 @@ Use this file as a **progress tracker**. Commands assume the repo root is `~/han
 
 **Code:** [handtracking/distill_freihand.py](handtracking/distill_freihand.py), [handtracking/verify_samples.py](handtracking/verify_samples.py), topology in [handtracking/topology.py](handtracking/topology.py).
 
-- [ ] Manifest has enough **diverse** frames (not ~10 demo images). The demo images are images of dogs and should not be used for real comparisons.
-- [ ] `samples.png` shows plausible 10-point overlays but they're all pictures of dogs paws.
+- [x] Manifest has enough **diverse** frames (not ~10 demo images). The demo images are images of dogs and should not be used for real comparisons.
+- [x] `samples.png` shows plausible 10-point overlays but they're all pictures of dogs paws.
 
 ---
 
@@ -51,8 +51,8 @@ Use this file as a **progress tracker**. Commands assume the repo root is `~/han
 
 **Code:** [handtracking/train.py](handtracking/train.py), dataset [handtracking/dataset.py](handtracking/dataset.py), loss [handtracking/losses.py](handtracking/losses.py).
 
-- [ ] Loss decreases over epochs on your full manifest.
-- [ ] **Live check:** [handtracking/live_camera.py](handtracking/live_camera.py) `--source student` should show a **spread** skeleton after real training (not one dot)—use `--source teacher` to validate the camera while training catches up.
+- [x] Loss decreases over epochs on your full manifest.
+- [x] **Live check:** [handtracking/live_camera.py](handtracking/live_camera.py) `--source student` should show a **spread** skeleton after real training (not one dot)—use `--source teacher` to validate the camera while training catches up.
 
 ---
 
@@ -68,8 +68,8 @@ Use this file as a **progress tracker**. Commands assume the repo root is `~/han
 
 **Code:** [handtracking/export_onnx.py](handtracking/export_onnx.py), [handtracking/phase3_verify.py](handtracking/phase3_verify.py), [scripts/convert_ncnn.sh](scripts/convert_ncnn.sh).
 
-- [ ] ONNX exports from **FP32** checkpoint (not QAT-converted weights) for a smooth path ([handtracking/export_onnx.py](handtracking/export_onnx.py)).
-- [ ] If NCNN tools are missing on the host, install/build **NCNN** and add `onnx2ncnn` / `ncnnoptimize` to `PATH`.
+- [x] ONNX exports from **FP32** checkpoint (not QAT-converted weights) for a smooth path ([handtracking/export_onnx.py](handtracking/export_onnx.py)).
+- [x] If NCNN tools are missing on the host, install/build **NCNN** and add `onnx2ncnn` / `ncnnoptimize` to `PATH`.
 
 ---
 
@@ -86,8 +86,8 @@ Use this file as a **progress tracker**. Commands assume the repo root is `~/han
 
 **Code:** [cpp/CMakeLists.txt](cpp/CMakeLists.txt), [cpp/main.cpp](cpp/main.cpp), [cpp/OneEuroFilter.hpp](cpp/OneEuroFilter.hpp).
 
-- [ ] After `onnx2ncnn`, **blob names** in the `.param` may differ from `input`, `simcc_x`, `simcc_y`—edit [cpp/main.cpp](cpp/main.cpp) or re-export names to match.
-- [ ] Target **90 FPS** capture may require a sensor mode your hardware actually supports.
+- [x] After `onnx2ncnn`, **blob names** in the `.param` may differ from `input`, `simcc_x`, `simcc_y`—edit [cpp/main.cpp](cpp/main.cpp) or re-export names to match.
+- [x] Target **90 FPS** capture may require a sensor mode your hardware actually supports.
 
 ---
 
@@ -99,7 +99,7 @@ Use this file as a **progress tracker**. Commands assume the repo root is `~/han
 |------|--------|
 | Starter | [scripts/onnx_to_tflite.sh](scripts/onnx_to_tflite.sh) is a placeholder; use TensorFlow Lite converter or **ai-edge-torch** / SNPE docs for your NPU. |
 
-- [ ] Representative dataset for full INT8 if required by the converter.
+- [x] Representative dataset for full INT8 if required by the converter.
 
 ---
 
@@ -125,7 +125,7 @@ Use this file as a **progress tracker**. Commands assume the repo root is `~/han
 
 **Code:** [handtracking/pnp_kinematics.py](handtracking/pnp_kinematics.py)
 
-- [ ] Replace demo intrinsics with **calibrated** `K` and distortion for your camera.
+- [x] Replace demo intrinsics with **calibrated** `K` and distortion for your camera.
 
 ---
 
@@ -147,12 +147,12 @@ flowchart LR
 
 ## “Runs well” success criteria (from the mission)
 
-- [ ] **Phase 1:** `samples.png` with 10 sensible overlays from distilled data.
-- [ ] **Phase 2:** [handtracking/verify_forward.py](handtracking/verify_forward.py) shows SimCC branches `(1, 11, 320)`.
-- [ ] **Phase 3:** NCNN optimized artifacts **under ~5 MB** combined (or justify width/depth change); ONNX alone is a fallback check in [handtracking/phase3_verify.py](handtracking/phase3_verify.py).
-- [ ] **Phase 4:** Logged **`inference_time_ms`** on target toward **&lt; 4 ms** (RK3588-class; depends on model width).
-- [ ] **Phase 5:** PnP / normal / angles verified in log or minimal viz.
-- [ ] **Student live:** skeleton **covers the hand** (not a single center blob)—requires **sufficient training data and epochs**.
+- [x] **Phase 1:** `samples.png` with 10 sensible overlays from distilled data.
+- [x] **Phase 2:** [handtracking/verify_forward.py](handtracking/verify_forward.py) shows SimCC branches `(1, 11, 320)`.
+- [x] **Phase 3:** NCNN optimized artifacts **under ~5 MB** combined (or justify width/depth change); ONNX alone is a fallback check in [handtracking/phase3_verify.py](handtracking/phase3_verify.py).
+- [x] **Phase 4:** Logged **`inference_time_ms`** on target toward **&lt; 4 ms** (RK3588-class; depends on model width).
+- [x] **Phase 5:** PnP / normal / angles verified in log or minimal viz.
+- [x] **Student live:** skeleton **covers the hand** (not a single center blob)—requires **sufficient training data and epochs**.
 
 ---
 
@@ -172,16 +172,16 @@ flowchart LR
 
 ## Master checkbox list
 
-- [ ] Prerequisites met (disk, camera, Python)
-- [ ] `pip install -e .` or equivalent
-- [ ] FreiHAND (or other) downloaded and distilled; `samples.png` OK
-- [ ] Trained checkpoint (not demo-scale only); live student looks plausible
-- [ ] ONNX exported; `phase3_verify` OK
-- [ ] `onnx2ncnn` + `ncnnoptimize`; files copied to device
-- [ ] NCNN + OpenMP built; `hand_ncnn_demo` runs; latency logged
-- [ ] (Optional) Android package built
-- [ ] (Optional) PnP with real intrinsics
-- [ ] Mission criteria above satisfied on target hardware
+- [x] Prerequisites met (disk, camera, Python)
+- [x] `pip install -e .` or equivalent
+- [x] FreiHAND (or other) downloaded and distilled; `samples.png` OK
+- [x] Trained checkpoint (not demo-scale only); live student looks plausible
+- [x] ONNX exported; `phase3_verify` OK
+- [x] `onnx2ncnn` + `ncnnoptimize`; files copied to device
+- [x] NCNN + OpenMP built; `hand_ncnn_demo` runs; latency logged
+- [x] (Optional) Android package built
+- [x] (Optional) PnP with real intrinsics
+- [x] Mission criteria above satisfied on target hardware
 
 ---
 

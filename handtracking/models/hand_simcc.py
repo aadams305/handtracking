@@ -18,27 +18,29 @@ class SimCCHead(nn.Module):
         super().__init__()
         self.num_joints = num_joints
         self.num_bins = num_bins
-        spatial_size = (INPUT_SIZE // 32) ** 2  # 25 for a 160px input
+        spatial_dim_len = INPUT_SIZE // 32  # 5 for a 160px input
         
-        # Maps backbone features explicitly to spatial heatmaps per-joint without loss of local topography!
+        # Maps backbone features explicitly to spatial heatmaps per-joint natively
         self.feat_conv = nn.Sequential(
             nn.Conv2d(in_channels, num_joints, kernel_size=1, bias=False),
             nn.BatchNorm2d(num_joints),
             nn.ReLU(inplace=True)
         )
         
-        # Translates coarse 5x5 spatial responses into high-resolution 1D 320 SimCC bins natively
-        self.x_proj = nn.Linear(spatial_size, num_bins)
-        self.y_proj = nn.Linear(spatial_size, num_bins)
+        # Translates orthogonal 5-element vectors directly to high-resolution 1D 320 SimCC bins
+        self.x_proj = nn.Linear(spatial_dim_len, num_bins)
+        self.y_proj = nn.Linear(spatial_dim_len, num_bins)
 
     def forward(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         # x: [B, C, H, W] -> e.g., [B, 64, 5, 5]
-        b = x.size(0)
         feat = self.feat_conv(x)  # [B, 10, 5, 5]
-        feat = feat.view(b, self.num_joints, -1)  # [B, 10, 25]
         
-        lx = self.x_proj(feat)  # [B, 10, 320]
-        ly = self.y_proj(feat)  # [B, 10, 320]
+        # True SimCC: Collapse orthogonal axes exclusively to decouple X and Y translation planes
+        x_heat = feat.sum(dim=2)  # Summing out Height yields the Width (X) dimension map -> [B, 10, 5]
+        y_heat = feat.sum(dim=3)  # Summing out Width yields the Height (Y) dimension map -> [B, 10, 5]
+        
+        lx = self.x_proj(x_heat)  # [B, 10, 320]
+        ly = self.y_proj(y_heat)  # [B, 10, 320]
         return lx, ly
 
 

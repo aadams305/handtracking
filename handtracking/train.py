@@ -63,8 +63,8 @@ def main() -> None:
     loader = DataLoader(ds, batch_size=args.batch_size, shuffle=True, num_workers=0)
 
     base = HandSimCCNet(width_mult=args.width_mult).to(device)
-    # Disable AWing loss! Soft-argmax gradients explode at random initialization on pixel-scale.
-    loss_fn = SimCCAdaptiveWingLoss(aw_weight=0.0).to(device)
+    # Ensure AWing loss is enabled to lock in strict coordinate granularity on continuous bins.
+    loss_fn = SimCCAdaptiveWingLoss(aw_weight=0.05).to(device)
 
     fp_epochs = args.epochs - args.qat_epochs if args.qat else args.epochs
     if fp_epochs < 0:

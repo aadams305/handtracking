@@ -18,29 +18,25 @@ class SimCCHead(nn.Module):
         super().__init__()
         self.num_joints = num_joints
         self.num_bins = num_bins
-        spatial_dim_len = INPUT_SIZE // 32  # 5 for a 160px input
         
-        # Maps backbone features explicitly to spatial heatmaps per-joint natively
-        self.feat_conv = nn.Sequential(
-            nn.Conv2d(in_channels, num_joints, kernel_size=1, bias=False),
-            nn.BatchNorm2d(num_joints),
-            nn.ReLU(inplace=True)
+        # 160px input -> stride 32 -> 5x5 spatial grid
+        spatial_area = (INPUT_SIZE // 32) ** 2  # 25
+        flattened_features = in_channels * spatial_area  # 64 * 25 = 1600
+        
+        # Double Dense layers decouple output dimension mappings avoiding NCNN slice corruption entirely
+        self.x_proj = nn.Sequential(
+            nn.Flatten(),
+            nn.Linear(flattened_features, num_joints * num_bins)
         )
-        
-        # Translates orthogonal 5-element vectors directly to high-resolution 1D 320 SimCC bins
-        self.x_proj = nn.Linear(spatial_dim_len, num_bins)
-        self.y_proj = nn.Linear(spatial_dim_len, num_bins)
+        self.y_proj = nn.Sequential(
+            nn.Flatten(),
+            nn.Linear(flattened_features, num_joints * num_bins)
+        )
 
     def forward(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
-        # x: [B, C, H, W] -> e.g., [B, 64, 5, 5]
-        feat = self.feat_conv(x)  # [B, 10, 5, 5]
-        
-        # True SimCC: Collapse orthogonal axes exclusively to decouple X and Y translation planes
-        x_heat = feat.sum(dim=2)  # Summing out Height yields the Width (X) dimension map -> [B, 10, 5]
-        y_heat = feat.sum(dim=3)  # Summing out Width yields the Height (Y) dimension map -> [B, 10, 5]
-        
-        lx = self.x_proj(x_heat)  # [B, 10, 320]
-        ly = self.y_proj(y_heat)  # [B, 10, 320]
+        b = x.size(0)
+        lx = self.x_proj(x).view(b, self.num_joints, self.num_bins)
+        ly = self.y_proj(x).view(b, self.num_joints, self.num_bins)
         return lx, ly
 
 

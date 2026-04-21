@@ -58,6 +58,20 @@ class HandSimCCDataset(Dataset):
             if self._rng.random() < 0.5:
                 lb_img = motion_blur(lb_img)
             lb_img, kp = rotate_180(lb_img, kp, p=0.25)
+            
+            # Massive Domain Gap Fix: Aggressive Scale & Translation
+            if self._rng.random() < 0.8:
+                # Random scale between 0.3x and 1.0x (simulating far away webcams)
+                scale = self._rng.uniform(0.3, 1.0)
+                # Random translation to corners
+                tx = self._rng.uniform(-160 * (1 - scale), 160 * (1 - scale))
+                ty = self._rng.uniform(-160 * (1 - scale), 160 * (1 - scale))
+                
+                M = np.float32([[scale, 0, tx], [0, scale, ty]])
+                lb_img = cv2.warpAffine(lb_img, M, (160, 160), borderValue=(114, 114, 114))
+                # Update keypoints
+                kp = kp * scale + np.array([tx, ty], dtype=np.float32)
+                
             lb_img = cutout(lb_img, kp, p=0.4)
         inp = normalize_bgr_tensor(lb_img)
         target = torch.from_numpy(kp)

@@ -7,7 +7,7 @@ from typing import Optional
 
 import numpy as np
 
-from handtracking.topology import MEDIAPIPE_INDICES_10, NUM_HAND_JOINTS
+from handtracking.topology import MEDIAPIPE_INDICES_21, NUM_HAND_JOINTS
 
 
 @dataclass
@@ -75,7 +75,7 @@ class MediaPipeTeacher:
             handedness = res.handedness[0][0].category_name
             
         pts = np.zeros((NUM_HAND_JOINTS, 3), dtype=np.float32)
-        for i, idx in enumerate(MEDIAPIPE_INDICES_10):
+        for i, idx in enumerate(MEDIAPIPE_INDICES_21):
             lm = hand[idx]
             pts[i, 0] = lm.x
             pts[i, 1] = lm.y
@@ -83,7 +83,7 @@ class MediaPipeTeacher:
         return TeacherResult(True, handedness, pts)
 
 
-def extract_10_points_pixel(
+def extract_21_points_pixel(
     landmarks_norm: np.ndarray, width: int, height: int
 ) -> np.ndarray:
     """(NUM_HAND_JOINTS,3) normalized -> (NUM_HAND_JOINTS,2) pixel xy in source image."""

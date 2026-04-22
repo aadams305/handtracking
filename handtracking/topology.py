@@ -1,48 +1,28 @@
 """
-10-point topology: subset of MediaPipe Hands 21 landmarks.
-
-Slot order (model output index 0..9):
-  Wrist, MCPs (index..pinky), tips (thumb..pinky).
-  Middle PIP (former 11th point / MediaPipe index 10) is omitted.
+Full 21-point MediaPipe hand topology.
 """
 
 from __future__ import annotations
 
 from typing import Final, List, Tuple
 
-NUM_HAND_JOINTS = 10
+NUM_HAND_JOINTS = 21
 
-# Output slot index -> MediaPipe landmark index
-MEDIAPIPE_INDICES_10: Final[Tuple[int, ...]] = (
-    0,  # wrist
-    5,
-    9,
-    13,
-    17,  # MCPs index, middle, ring, pinky
-    4,
-    8,
-    12,
-    16,
-    20,  # tips thumb..pinky
-)
+# Output slot index -> MediaPipe landmark index (1-to-1)
+MEDIAPIPE_INDICES_21: Final[Tuple[int, ...]] = tuple(range(21))
 
-HAND_10_NAMES: Final[Tuple[str, ...]] = (
+HAND_21_NAMES: Final[Tuple[str, ...]] = (
     "wrist",
-    "mcp_index",
-    "mcp_middle",
-    "mcp_ring",
-    "mcp_pinky",
-    "tip_thumb",
-    "tip_index",
-    "tip_middle",
-    "tip_ring",
-    "tip_pinky",
+    "thumb_cmc", "thumb_mcp", "thumb_ip", "thumb_tip",
+    "index_mcp", "index_pip", "index_dip", "index_tip",
+    "middle_mcp", "middle_pip", "middle_dip", "middle_tip",
+    "ring_mcp", "ring_pip", "ring_dip", "ring_tip",
+    "pinky_mcp", "pinky_pip", "pinky_dip", "pinky_tip",
 )
 
 MEDIAPIPE_TO_SLOT: Final[dict[int, int]] = {
-    mp: slot for slot, mp in enumerate(MEDIAPIPE_INDICES_10)
+    mp: slot for slot, mp in enumerate(MEDIAPIPE_INDICES_21)
 }
 
-
-def mediapipe_indices_10() -> List[int]:
-    return list(MEDIAPIPE_INDICES_10)
+def mediapipe_indices_21() -> List[int]:
+    return list(MEDIAPIPE_INDICES_21)

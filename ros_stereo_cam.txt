@@ -1,0 +1,16 @@
+cd ~/Desktop
+source /opt/ros/humble/setup.bash
+#source /home/aidan/ros2_humble/install/setup.bash
+#source install/setup.bash
+ros2 run v4l2_camera v4l2_camera_node   --ros-args
+
+cd ~/Desktop
+#source /home/aidan/ros2_humble/install/setup.bash
+#source install/setup.bash
+source /opt/ros/humble/setup.bash
+python3 stereo_splitter.py
+
+#source /home/aidan/ros2_humble/install/setup.bash
+#source install/setup.bash
+source /opt/ros/humble/setup.bash
+ros2 run rqt_image_view rqt_image_view

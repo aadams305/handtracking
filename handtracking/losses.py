@@ -54,8 +54,8 @@ class SimCCAdaptiveWingLoss(nn.Module):
 
     def __init__(
         self,
-        num_bins: int = 320,
-        input_size: int = 160,
+        num_bins: int = 512,
+        input_size: int = 256,
         label_smoothing: float = 0.1,
         aw_weight: float = 0.05,
     ) -> None:

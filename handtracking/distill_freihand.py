@@ -15,7 +15,7 @@ from tqdm import tqdm
 
 from handtracking.dataset_manifest import DistilledSample, LetterboxMeta, write_manifest
 from handtracking.geometry import letterbox_image
-from handtracking.teacher import MediaPipeTeacher, extract_10_points_pixel
+from handtracking.teacher import MediaPipeTeacher, extract_21_points_pixel
 
 
 def find_freihand_rgb_dir(data_root: Path) -> Path:
@@ -53,10 +53,10 @@ def distill_images(
             tr = teacher.process_bgr(img)
             if not tr.ok or tr.landmarks_norm is None:
                 continue
-            kp_src = extract_10_points_pixel(tr.landmarks_norm[:, :2], w, h)
-            lb_img, lb = letterbox_image(img, 160)
-            kp_dst = np.zeros((10, 2), dtype=np.float32)
-            for i in range(10):
+            kp_src = extract_21_points_pixel(tr.landmarks_norm[:, :2], w, h)
+            lb_img, lb = letterbox_image(img, 256)
+            kp_dst = np.zeros((21, 2), dtype=np.float32)
+            for i in range(21):
                 kp_dst[i, 0], kp_dst[i, 1] = lb.map_xy_src_to_dst(
                     float(kp_src[i, 0]), float(kp_src[i, 1])
                 )
@@ -66,7 +66,7 @@ def distill_images(
                 pad_y=lb.pad_y,
                 src_w=lb.src_w,
                 src_h=lb.src_h,
-                dst=160,
+                dst=256,
             )
             samples.append(
                 DistilledSample(

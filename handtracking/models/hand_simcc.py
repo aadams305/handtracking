@@ -9,8 +9,8 @@ from handtracking.models.mobilenet_v4_conv_small import MobileNetV4ConvSmall
 from handtracking.topology import NUM_HAND_JOINTS
 
 NUM_JOINTS = NUM_HAND_JOINTS
-NUM_BINS = 320  # 2 bins per pixel for 160px span
-INPUT_SIZE = 160
+NUM_BINS = 512  # 2 bins per pixel for 256px span
+INPUT_SIZE = 256
 
 
 class SimCCHead(nn.Module):
@@ -19,9 +19,9 @@ class SimCCHead(nn.Module):
         self.num_joints = num_joints
         self.num_bins = num_bins
         
-        # 160px input -> stride 32 -> 5x5 spatial grid
-        spatial_area = (INPUT_SIZE // 32) ** 2  # 25
-        flattened_features = in_channels * spatial_area  # 64 * 25 = 1600
+        # 256px input -> stride 32 -> 8x8 spatial grid
+        spatial_area = (INPUT_SIZE // 32) ** 2  # 64
+        flattened_features = in_channels * spatial_area  # 64 * 64 = 4096
         
         # Double Dense layers decouple output dimension mappings avoiding NCNN slice corruption entirely
         self.x_proj = nn.Sequential(

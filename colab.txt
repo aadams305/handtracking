@@ -1,0 +1,121 @@
+# Google Colab: FreiHAND distill + SimCC training (256x256, 21 joints, 256 bins)
+# Runtime: use GPU (Runtime -> Change runtime type -> T4 or better).
+# Repo: https://github.com/aadams305/handtracking — keep this branch in sync with local SimCC changes.
+
+# =============================================================================
+# Block 1 — Mount Drive and backup folder
+# =============================================================================
+from google.colab import drive
+import os
+
+drive.mount("/content/drive")
+
+BACKUP = "/content/drive/MyDrive/handtracking7"
+os.makedirs(BACKUP, exist_ok=True)
+print("Drive mounted; backup dir:", BACKUP)
+
+# =============================================================================
+# Block 2 — Clone repo, install, FreiHAND (~15 GB)
+# =============================================================================
+# !rm -rf /content/handtracking   # optional: fresh clone
+!git clone https://github.com/aadams305/handtracking.git
+%cd /content/handtracking
+
+# Editable install pulls deps from pyproject.toml (torch, mediapipe, opencv, tqdm, ...).
+# Colab usually has CUDA torch already; if import torch fails, install a CUDA wheel first, then re-run pip install -e .
+!pip install -q -e .
+
+# Optional: export ONNX from Colab later
+# !pip install -q onnxscript
+
+!wget -nc https://lmb.informatik.uni-freiburg.de/data/freihand/FreiHAND_pub_v2.zip
+!mkdir -p data/freihand
+!unzip -q -o FreiHAND_pub_v2.zip -d data/freihand
+
+# After unzip, FreiHAND layout is often: data/freihand/<zip_root>/training/rgb/
+!ls -la data/freihand
+
+# =============================================================================
+# Block 3 — Distill (MediaPipe teacher -> manifest JSONL)
+# =============================================================================
+# Pick --data-root: directory that contains training/rgb (or rgb), OR the folder of images.
+# Common case after unzip:
+#   data/freihand/FreiHAND_pub_v2/training/rgb
+# If training/rgb sits directly under data/freihand, use data/freihand instead.
+
+%%bash
+set -e
+cd /content/handtracking
+if [ -d "data/freihand/training/rgb" ]; then
+  DR="data/freihand"
+elif [ -d "data/freihand/FreiHAND_pub_v2/training/rgb" ]; then
+  DR="data/freihand/FreiHAND_pub_v2"
+else
+  echo "Could not find training/rgb under data/freihand; list dirs and set DR manually in distill command."
+  find data/freihand -maxdepth 3 -type d
+  exit 1
+fi
+echo "Using data-root: $DR"
+python3 -m handtracking.distill_freihand --data-root "$DR" --out data/distilled/manifest.jsonl
+
+# =============================================================================
+# Block 4 — Sanity check (matches current SimCC: conv head, 256 bins, Gaussian loss)
+# =============================================================================
+import sys
+sys.path.insert(0, "/content/handtracking")
+
+import torch
+from pathlib import Path
+
+from handtracking.models.hand_simcc import HandSimCCNet, INPUT_SIZE, NUM_BINS, NUM_JOINTS
+
+m = HandSimCCNet(width_mult=0.5).eval()
+x = torch.randn(1, 3, INPUT_SIZE, INPUT_SIZE, device="cuda" if torch.cuda.is_available() else "cpu")
+lx, ly = m(x)
+assert lx.shape == (1, NUM_JOINTS, NUM_BINS), lx.shape
+assert ly.shape == (1, NUM_JOINTS, NUM_BINS), ly.shape
+assert hasattr(m.head, "conv_x") and hasattr(m.head, "conv_y"), "Expected conv SimCC head (no x_proj / FC bins)."
+
+train_src = Path("/content/handtracking/handtracking/train.py").read_text()
+assert "SimCCGaussianSoftCELoss" in train_src, "train.py should use SimCCGaussianSoftCELoss."
+assert "SimCCAdaptiveWingLoss" not in train_src, "Adaptive Wing was removed; update Colab if this fails."
+
+ds_src = Path("/content/handtracking/handtracking/dataset.py").read_text()
+assert "letterbox_image(img, INPUT_SIZE)" in ds_src, "Dataset should letterbox to INPUT_SIZE (256)."
+
+print("OK: input", tuple(x.shape), "lx/ly", tuple(lx.shape), tuple(ly.shape))
+print("OK: INPUT_SIZE=", INPUT_SIZE, "NUM_BINS=", NUM_BINS, "NUM_JOINTS=", NUM_JOINTS)
+
+# =============================================================================
+# Block 5 — Train (first run: omit --resume; later runs can add --resume)
+# =============================================================================
+# Reduce --batch-size if CUDA OOM (256^2 is heavier than 160^2).
+# Checkpoints: checkpoints/hand_simcc.pt (final) and checkpoints/hand_simcc_latest.pt (per-epoch resume).
+
+!python3 -m handtracking.train \
+  --manifest data/distilled/manifest.jsonl \
+  --epochs 100 \
+  --batch-size 16 \
+  --lr 1e-3 \
+  --lr-gamma 0.95 \
+  --out checkpoints/hand_simcc.pt
+
+# Resume example (after a disconnect):
+# !python3 -m handtracking.train --manifest data/distilled/manifest.jsonl --epochs 100 --batch-size 16 --out checkpoints/hand_simcc.pt --resume
+
+# =============================================================================
+# Block 6 — Copy checkpoints to Drive
+# =============================================================================
+!cp -r /content/handtracking/checkpoints /content/drive/MyDrive/handtracking7/
+print("Copied checkpoints to Drive.")
+
+# =============================================================================
+# Block 7 — Zip full project (code + data + checkpoints) to Drive
+# =============================================================================
+%cd /content
+!zip -rq /content/drive/MyDrive/handtracking7/handtr.zip handtracking
+print("Wrote handtr.zip to Drive (handtracking7).")
+
+# Optional: export ONNX (needs trained FP32 checkpoint, not QAT-only)
+# %cd /content/handtracking
+# !python3 -m handtracking.export_onnx --checkpoint checkpoints/hand_simcc.pt --out models/hand_simcc.onnx

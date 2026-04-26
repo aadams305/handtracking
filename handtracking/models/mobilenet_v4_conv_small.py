@@ -1,6 +1,6 @@
 """
 MobileNetV4 Conv-Small style backbone (conv-only, no attention).
-Simplified Universal Inverted Bottleneck stack for 160x160 RGB input.
+Simplified Universal Inverted Bottleneck stack (RGB; typically 256×256 for SimCC).
 """
 
 from __future__ import annotations

@@ -15,16 +15,16 @@ class LetterboxMeta:
     pad_y: float
     src_w: int
     src_h: int
-    dst: int = 160
+    dst: int = 256
 
 
 @dataclass
 class DistilledSample:
-    """One training row: keypoints in 160x160 letterboxed pixel space."""
+    """One training row: keypoints in ``dst``×``dst`` letterboxed pixel space."""
 
     image_path: str
     letterbox: LetterboxMeta
-    keypoints_xy: List[List[float]]  # 10 x 2 in [0, dst)
+    keypoints_xy: List[List[float]]  # NUM_HAND_JOINTS x 2 in [0, dst)
 
     def to_json_line(self) -> str:
         d = {

@@ -19,16 +19,16 @@
 #include <opencv2/opencv.hpp>
 
 #if HAS_NCNN
-#include <net.h>
+#include "net.h"
 #endif
 
 #include "OneEuroFilter.hpp"
 
-static const int kSize = 160;
-static const int kJoints = 10;
-static const int kBins = 320;
+static const int kSize = 256;
+static const int kJoints = 21;
+static const int kBins = 256;
 
-static void letterbox(const cv::Mat& src, cv::Mat& dst160, float& scale, float& pad_x, float& pad_y) {
+static void letterbox(const cv::Mat& src, cv::Mat& dst_sq, float& scale, float& pad_x, float& pad_y) {
     int w = src.cols, h = src.rows;
     scale = std::min(kSize / float(w), kSize / float(h));
     int nw = int(std::round(w * scale));
@@ -37,15 +37,15 @@ static void letterbox(const cv::Mat& src, cv::Mat& dst160, float& scale, float& 
     pad_y = (kSize - nh) * 0.5f;
     cv::Mat resized;
     cv::resize(src, resized, cv::Size(nw, nh), 0, 0, cv::INTER_AREA);
-    dst160 = cv::Mat(kSize, kSize, CV_8UC3, cv::Scalar(114, 114, 114));
+    dst_sq = cv::Mat(kSize, kSize, CV_8UC3, cv::Scalar(114, 114, 114));
     int x0 = int(std::round(pad_x));
     int y0 = int(std::round(pad_y));
-    resized.copyTo(dst160(cv::Rect(x0, y0, nw, nh)));
+    resized.copyTo(dst_sq(cv::Rect(x0, y0, nw, nh)));
 }
 
 #if HAS_NCNN
-static void fill_input_nchw_imagenet(const cv::Mat& bgr160, ncnn::Mat& in) {
-    in = ncnn::Mat::from_pixels(bgr160.data, ncnn::Mat::PIXEL_BGR2RGB, bgr160.cols, bgr160.rows);
+static void fill_input_nchw_imagenet(const cv::Mat& bgr_sq, ncnn::Mat& in) {
+    in = ncnn::Mat::from_pixels(bgr_sq.data, ncnn::Mat::PIXEL_BGR2RGB, bgr_sq.cols, bgr_sq.rows);
     const float mean_vals[3] = {0.485f * 255.f, 0.456f * 255.f, 0.406f * 255.f};
     const float norm_vals[3] = {1.0f / (0.229f * 255.f), 1.0f / (0.224f * 255.f), 1.0f / (0.225f * 255.f)};
     in.substract_mean_normalize(mean_vals, norm_vals);
@@ -85,10 +85,6 @@ static void decode_simcc(const ncnn::Mat& outx, const ncnn::Mat& outy, float coo
         coords[j][1] = cy;
     }
 }
-
-struct FrameBuf {
-    cv::Mat bgr160;
-};
 #endif
 
 int main(int argc, char** argv) {
@@ -133,12 +129,12 @@ int main(int argc, char** argv) {
         cv::Mat frame;
         if (!cap.read(frame)) break;
         
-        cv::Mat bgr160;
+        cv::Mat bgr_sq;
         float sc, px, py;
-        letterbox(frame, bgr160, sc, px, py);
+        letterbox(frame, bgr_sq, sc, px, py);
 
         ncnn::Mat in;
-        fill_input_nchw_imagenet(bgr160, in);
+        fill_input_nchw_imagenet(bgr_sq, in);
         
         auto t0 = std::chrono::steady_clock::now();
         ncnn::Extractor ex = net.create_extractor();
@@ -155,26 +151,19 @@ int main(int argc, char** argv) {
         float coords[kJoints][2];
         decode_simcc(outx, outy, coords);
         
-        // Draw the 10 joints on the original frame
         for (int j = 0; j < kJoints; ++j) {
             float smoothed_x = fx[j](coords[j][0]);
             float smoothed_y = fy[j](coords[j][1]);
-            
-            // Un-letterbox back to original `frame` pixel space
+
             int real_x = int((smoothed_x - px) / sc);
             int real_y = int((smoothed_y - py) / sc);
-            
+
             std::cout << "[" << real_x << "," << real_y << "] ";
 
             if (j == 0) {
-                // Wrist = Red
-                cv::circle(frame, cv::Point(real_x, real_y), 6, cv::Scalar(0, 0, 255), -1);
-            } else if (j <= 4) {
-                // MCPs = Yellow
-                cv::circle(frame, cv::Point(real_x, real_y), 5, cv::Scalar(0, 255, 255), -1);
+                cv::circle(frame, cv::Point(real_x, real_y), 5, cv::Scalar(0, 0, 255), -1);
             } else {
-                // Tips = Green
-                cv::circle(frame, cv::Point(real_x, real_y), 4, cv::Scalar(0, 255, 0), -1);
+                cv::circle(frame, cv::Point(real_x, real_y), 3, cv::Scalar(0, 255, 0), -1);
             }
         }
 

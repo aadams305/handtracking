@@ -110,7 +110,7 @@ def main():
     axs[1].set_title("MobileNetV4 SimCC (Predicted)")
     axs[1].axis('off')
     
-    out_path = "/home/aidan/.gemini/antigravity/brain/75ebae8f-2e05-4ae4-939a-a4a08439d809/artifacts/comparison.png"
+    out_path = "/home/aidan/.gemini/antigravity/brain/bca659aa-0337-4138-a674-af4bda8f5ef4/comparison.png"
     plt.savefig(out_path, bbox_inches='tight', dpi=150)
     print(f"Saved exact comparison to artifacts!")
     

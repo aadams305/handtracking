@@ -14,15 +14,15 @@ from torch.optim.lr_scheduler import ExponentialLR
 from torch.utils.data import DataLoader
 
 from handtracking.dataset import HandSimCCDataset
-from handtracking.losses import SimCCAdaptiveWingLoss
-from handtracking.models.hand_simcc import HandSimCCNet, decode_simcc_soft_argmax
+from handtracking.losses import SimCCGaussianSoftCELoss
+from handtracking.models.hand_simcc import HandSimCCNet
 from handtracking.qat_wrapper import QATSimCCWrapper, apply_qat_prepare
 
 
 def train_epoch(
     model: nn.Module,
     loader: DataLoader,
-    loss_fn: SimCCAdaptiveWingLoss,
+    loss_fn: SimCCGaussianSoftCELoss,
     opt: torch.optim.Optimizer,
     device: torch.device,
 ) -> float:
@@ -34,7 +34,7 @@ def train_epoch(
         y = y.to(device)
         opt.zero_grad(set_to_none=True)
         lx, ly = model(x)
-        loss = loss_fn(lx, ly, y, decode_simcc_soft_argmax)
+        loss = loss_fn(lx, ly, y)
         loss.backward()
         opt.step()
         total += float(loss.item()) * x.size(0)
@@ -63,8 +63,7 @@ def main() -> None:
     loader = DataLoader(ds, batch_size=args.batch_size, shuffle=True, num_workers=0)
 
     base = HandSimCCNet(width_mult=args.width_mult).to(device)
-    # Ensure AWing loss is enabled to lock in strict coordinate granularity on continuous bins.
-    loss_fn = SimCCAdaptiveWingLoss(aw_weight=0.05).to(device)
+    loss_fn = SimCCGaussianSoftCELoss().to(device)
 
     fp_epochs = args.epochs - args.qat_epochs if args.qat else args.epochs
     if fp_epochs < 0:

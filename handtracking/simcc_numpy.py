@@ -4,11 +4,10 @@ from __future__ import annotations
 
 import numpy as np
 
+from handtracking.models.hand_simcc import INPUT_SIZE, NUM_BINS
 from handtracking.topology import NUM_HAND_JOINTS
 
 NUM_JOINTS = NUM_HAND_JOINTS
-NUM_BINS = 320
-INPUT_SIZE = 160.0
 
 
 def softmax(x: np.ndarray, axis: int = -1) -> np.ndarray:
@@ -20,11 +19,11 @@ def softmax(x: np.ndarray, axis: int = -1) -> np.ndarray:
 def decode_simcc_soft_argmax_numpy(
     lx: np.ndarray,
     ly: np.ndarray,
-    input_size: float = INPUT_SIZE,
+    input_size: float = float(INPUT_SIZE),
     num_bins: int = NUM_BINS,
 ) -> np.ndarray:
     """
-    lx, ly: (J, 320) or (1, J, 320) float32 logits -> (J, 2) pixel coords in letterbox.
+    lx, ly: (J, num_bins) or (1, J, num_bins) float32 logits -> (J, 2) pixel coords in letterbox.
     """
     if lx.ndim == 3:
         lx = lx[0]
@@ -37,9 +36,9 @@ def decode_simcc_soft_argmax_numpy(
     return np.stack([x_coord, y_coord], axis=-1)
 
 
-def bgr160_to_nchw_batch(img_bgr_160: np.ndarray) -> np.ndarray:
-    """uint8 BGR 160x160 -> float32 NCHW (1,3,160,160) ImageNet norm."""
-    rgb = img_bgr_160[:, :, ::-1].astype(np.float32) / 255.0
+def bgr_letterbox_to_nchw_batch(img_bgr: np.ndarray) -> np.ndarray:
+    """uint8 BGR ``H×H`` letterbox (e.g. 256×256) -> float32 NCHW (1,3,H,H) ImageNet norm."""
+    rgb = img_bgr[:, :, ::-1].astype(np.float32) / 255.0
     ch = np.transpose(rgb, (2, 0, 1))
     mean = np.array([0.485, 0.456, 0.406], dtype=np.float32).reshape(3, 1, 1)
     std = np.array([0.229, 0.224, 0.225], dtype=np.float32).reshape(3, 1, 1)
@@ -56,5 +55,4 @@ def keypoints_collapsed(kp_full: np.ndarray, frame_shape: tuple[int, int, ...]) 
     for i in range(len(kp_full)):
         for j in range(i + 1, len(kp_full)):
             spread = max(spread, float(np.linalg.norm(kp_full[i] - kp_full[j])))
-    # Looser than a real hand span; catches the 'one green dot' case
     return spread < 0.04 * float(min(h, w))

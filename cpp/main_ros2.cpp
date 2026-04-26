@@ -15,7 +15,7 @@
 #include <opencv2/calib3d.hpp>
 
 #if HAS_NCNN
-#include <net.h>
+#include "net.h"
 #endif
 
 #include "OneEuroFilter.hpp"
@@ -25,9 +25,9 @@
 #include "sensor_msgs/msg/image.hpp"
 #include "cv_bridge/cv_bridge.h"
 
-static const int kSize = 160;
-static const int kJoints = 10;
-static const int kBins = 320;
+static const int kSize = 256;
+static const int kJoints = 21;
+static const int kBins = 256;
 
 // SLAM Calib (cam1) -> Pinhole Approximation for ds model
 static const double FX = 148.390;
@@ -35,7 +35,7 @@ static const double FY = 148.675;
 static const double CX = 151.987;
 static const double CY = 115.147;
 
-static void letterbox(const cv::Mat& src, cv::Mat& dst160, float& scale, float& pad_x, float& pad_y) {
+static void letterbox(const cv::Mat& src, cv::Mat& dst_sq, float& scale, float& pad_x, float& pad_y) {
     int w = src.cols, h = src.rows;
     scale = std::min(kSize / float(w), kSize / float(h));
     int nw = int(std::round(w * scale));
@@ -44,15 +44,15 @@ static void letterbox(const cv::Mat& src, cv::Mat& dst160, float& scale, float& 
     pad_y = (kSize - nh) * 0.5f;
     cv::Mat resized;
     cv::resize(src, resized, cv::Size(nw, nh), 0, 0, cv::INTER_AREA);
-    dst160 = cv::Mat(kSize, kSize, CV_8UC3, cv::Scalar(114, 114, 114));
+    dst_sq = cv::Mat(kSize, kSize, CV_8UC3, cv::Scalar(114, 114, 114));
     int x0 = int(std::round(pad_x));
     int y0 = int(std::round(pad_y));
-    resized.copyTo(dst160(cv::Rect(x0, y0, nw, nh)));
+    resized.copyTo(dst_sq(cv::Rect(x0, y0, nw, nh)));
 }
 
 #if HAS_NCNN
-static void fill_input_nchw_imagenet(const cv::Mat& bgr160, ncnn::Mat& in) {
-    in = ncnn::Mat::from_pixels(bgr160.data, ncnn::Mat::PIXEL_BGR2RGB, bgr160.cols, bgr160.rows);
+static void fill_input_nchw_imagenet(const cv::Mat& bgr_sq, ncnn::Mat& in) {
+    in = ncnn::Mat::from_pixels(bgr_sq.data, ncnn::Mat::PIXEL_BGR2RGB, bgr_sq.cols, bgr_sq.rows);
     const float mean_vals[3] = {0.485f * 255.f, 0.456f * 255.f, 0.406f * 255.f};
     const float norm_vals[3] = {1.0f / (0.229f * 255.f), 1.0f / (0.224f * 255.f), 1.0f / (0.225f * 255.f)};
     in.substract_mean_normalize(mean_vals, norm_vals);
@@ -165,12 +165,12 @@ private:
         }
 
         cv::Mat frame = cv_ptr->image;
-        cv::Mat bgr160;
+        cv::Mat bgr_sq;
         float sc, px, py;
-        letterbox(frame, bgr160, sc, px, py);
+        letterbox(frame, bgr_sq, sc, px, py);
 
         ncnn::Mat in;
-        fill_input_nchw_imagenet(bgr160, in);
+        fill_input_nchw_imagenet(bgr_sq, in);
 
         auto t0 = std::chrono::steady_clock::now();
         ncnn::Extractor ex = net_.create_extractor();

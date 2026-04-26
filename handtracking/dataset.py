@@ -13,6 +13,7 @@ from torch.utils.data import Dataset
 from handtracking.augmentations import cutout, motion_blur, rotate_180
 from handtracking.dataset_manifest import iter_manifest
 from handtracking.geometry import letterbox_image
+from handtracking.models.hand_simcc import INPUT_SIZE
 from handtracking.topology import NUM_HAND_JOINTS
 
 
@@ -47,7 +48,12 @@ class HandSimCCDataset(Dataset):
         img = cv2.imread(s.image_path)
         if img is None:
             raise FileNotFoundError(s.image_path)
-        lb_img, _ = letterbox_image(img, 256)
+        if s.letterbox.dst != INPUT_SIZE:
+            raise ValueError(
+                f"{s.image_path}: manifest letterbox.dst={s.letterbox.dst}; "
+                f"expected {INPUT_SIZE} (re-run distill_freihand)."
+            )
+        lb_img, _ = letterbox_image(img, INPUT_SIZE)
         kp = np.array(s.keypoints_xy, dtype=np.float32)
         if kp.shape[0] != NUM_HAND_JOINTS:
             raise ValueError(

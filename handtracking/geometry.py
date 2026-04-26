@@ -1,4 +1,4 @@
-"""Letterbox resize and coordinate transforms for fixed 160x160 input."""
+"""Letterbox resize and coordinate transforms for fixed square input (default 256×256)."""
 
 from __future__ import annotations
 
@@ -15,7 +15,7 @@ class Letterbox:
     pad_y: float
     src_w: int
     src_h: int
-    dst: int = 160
+    dst: int = 256
 
     def map_xy_norm_to_dst(self, x_norm: float, y_norm: float) -> Tuple[float, float]:
         """MediaPipe normalized [0,1] x,y in source image -> pixel coords in dst x dst."""
@@ -47,7 +47,7 @@ def letterbox_params(src_w: int, src_h: int, dst: int = 160) -> Letterbox:
 
 
 def letterbox_image(
-    image_bgr: np.ndarray, dst: int = 160
+    image_bgr: np.ndarray, dst: int = 256
 ) -> Tuple[np.ndarray, Letterbox]:
     import cv2
 

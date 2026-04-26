@@ -55,16 +55,17 @@ def main():
     
     # 1. MediaPipe Detector Stage
     mp_hands = mp.solutions.hands
-    hands = mp_hands.Hands(static_image_mode=True, max_num_hands=1, min_detection_confidence=0.5)
+    hands = mp_hands.Hands(static_image_mode=True, max_num_hands=1, min_detection_confidence=0.1)
     results = hands.process(img_rgb)
     if not results.multi_hand_landmarks:
-        print("MediaPipe Palm Detector found no hands in the frame!")
-        return
+        print("MediaPipe Palm Detector found no hands! Falling back to full image crop (FreiHAND style).")
+        crop_256 = cv2.resize(img, (256, 256))
+        gt_256 = np.array([])
+    else:
+        kp21 = results.multi_hand_landmarks[0].landmark
+        # 2. Extract perfectly isolated patch
+        crop_256, gt_256, _ = get_crop_with_padding(img, kp21, target_size=256, pad_ratio=0.5)
         
-    kp21 = results.multi_hand_landmarks[0].landmark
-    
-    # 2. Extract perfectly isolated patch
-    crop_256, gt_256, _ = get_crop_with_padding(img, kp21, target_size=256, pad_ratio=0.5)
     crop_rgb = cv2.cvtColor(crop_256, cv2.COLOR_BGR2RGB)
     
     # 3. Native PyTorch MobileNetV4 Tracking
@@ -94,8 +95,11 @@ def main():
     fig, axs = plt.subplots(1, 2, figsize=(10, 5))
     
     axs[0].imshow(crop_rgb)
-    axs[0].scatter(gt_256[:, 0], gt_256[:, 1], c='r', s=20)
-    axs[0].set_title("MediaPipe Detector Target")
+    if gt_256.size > 0:
+        axs[0].scatter(gt_256[:, 0], gt_256[:, 1], c='r', s=20)
+        axs[0].set_title("MediaPipe Detector Target")
+    else:
+        axs[0].set_title("MediaPipe Failed (Full Image Fallback)")
     axs[0].axis('off')
     
     axs[1].imshow(crop_rgb)
@@ -103,7 +107,7 @@ def main():
     axs[1].set_title(f"MobileNet-V4 HighRes (256)")
     axs[1].axis('off')
     
-    plt.savefig("/home/aidan/.gemini/antigravity/brain/75ebae8f-2e05-4ae4-939a-a4a08439d809/artifacts/final_eval.png", bbox_inches='tight', dpi=150)
+    plt.savefig("/home/aidan/.gemini/antigravity/brain/bca659aa-0337-4138-a674-af4bda8f5ef4/final_eval.png", bbox_inches='tight', dpi=150)
     print("Static PyTorch Evaluation rendering saved!")
     
 if __name__ == "__main__":

@@ -1,4 +1,4 @@
-"""Verification Phase 1: samples.png with 10 images and 10-point overlays."""
+"""Verification Phase 1: samples.png with a grid of letterboxed patches and 21-point overlays."""
 
 from __future__ import annotations
 
@@ -11,17 +11,18 @@ import numpy as np
 
 from handtracking.dataset_manifest import iter_manifest
 from handtracking.geometry import letterbox_image
-from handtracking.viz import draw_hand_10
+from handtracking.models.hand_simcc import INPUT_SIZE
+from handtracking.viz import draw_hand_21
 
 
 def load_keypoints_on_letterboxed(
     image_path: str, keypoints_xy: list
 ) -> tuple[np.ndarray, np.ndarray]:
-    """Return letterboxed BGR 160x160 and keypoints (10,2) in same space."""
+    """Return letterboxed BGR ``INPUT_SIZE``×``INPUT_SIZE`` and keypoints ``(J,2)`` in same space."""
     img = cv2.imread(image_path)
     if img is None:
         raise FileNotFoundError(image_path)
-    lb_img, _ = letterbox_image(img, 160)
+    lb_img, _ = letterbox_image(img, INPUT_SIZE)
     kp = np.array(keypoints_xy, dtype=np.float32)
     return lb_img, kp
 
@@ -41,13 +42,13 @@ def make_grid(
     pick = random.sample(rows, num)
     cols = 5
     r = 2
-    cell = 160
+    cell = INPUT_SIZE
     canvas = np.zeros((r * cell, cols * cell, 3), dtype=np.uint8)
     for i, sample in enumerate(pick):
         lb_img, kp = load_keypoints_on_letterboxed(
             sample.image_path, sample.keypoints_xy
         )
-        vis = draw_hand_10(lb_img, kp)
+        vis = draw_hand_21(lb_img, kp)
         y, x = divmod(i, cols)
         canvas[y * cell : (y + 1) * cell, x * cell : (x + 1) * cell] = vis
     out_png.parent.mkdir(parents=True, exist_ok=True)

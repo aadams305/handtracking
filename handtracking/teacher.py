@@ -1,4 +1,4 @@
-"""MediaPipe Hands (Full) teacher for 10 keypoints."""
+"""MediaPipe Hands (Tasks API) teacher for 21 keypoints (NUM_HAND_JOINTS)."""
 
 from __future__ import annotations
 

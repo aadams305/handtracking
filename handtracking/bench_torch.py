@@ -7,7 +7,7 @@ import time
 
 import torch
 
-from handtracking.models.hand_simcc import HandSimCCNet
+from handtracking.models.hand_simcc import HandSimCCNet, INPUT_SIZE
 
 
 def main() -> None:
@@ -19,7 +19,7 @@ def main() -> None:
 
     device = torch.device("cpu")
     m = HandSimCCNet(width_mult=args.width_mult).eval().to(device)
-    x = torch.randn(1, 3, 160, 160, device=device)
+    x = torch.randn(1, 3, INPUT_SIZE, INPUT_SIZE, device=device)
     with torch.no_grad():
         for _ in range(args.warmup):
             m(x)

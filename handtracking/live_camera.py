@@ -27,21 +27,22 @@ import numpy as np
 
 from handtracking.dataset import normalize_bgr_tensor
 from handtracking.geometry import letterbox_image
+from handtracking.models.hand_simcc import INPUT_SIZE
 from handtracking.simcc_numpy import (
-    bgr160_to_nchw_batch,
+    bgr_letterbox_to_nchw_batch,
     decode_simcc_soft_argmax_numpy,
     keypoints_collapsed,
 )
-from handtracking.teacher import MediaPipeTeacher, extract_10_points_pixel
-from handtracking.viz import draw_hand_10
+from handtracking.teacher import MediaPipeTeacher, extract_21_points_pixel
+from handtracking.viz import draw_hand_21
 
 
-def keypoints_160_to_frame(kp_160: np.ndarray, lb) -> np.ndarray:
-    """(10,2) in 160 letterbox space -> full-frame pixels."""
-    out = np.empty_like(kp_160)
-    for i in range(kp_160.shape[0]):
+def keypoints_square_to_frame(kp_square: np.ndarray, lb) -> np.ndarray:
+    """``(J,2)`` in ``INPUT_SIZE``×``INPUT_SIZE`` letterbox space -> full-frame pixels."""
+    out = np.empty_like(kp_square)
+    for i in range(kp_square.shape[0]):
         out[i, 0], out[i, 1] = lb.map_xy_dst_to_src(
-            float(kp_160[i, 0]), float(kp_160[i, 1])
+            float(kp_square[i, 0]), float(kp_square[i, 1])
         )
     return out
 
@@ -154,7 +155,7 @@ def main() -> None:
             net = HandSimCCNet(width_mult=wm).eval()
             net.load_state_dict(ckpt["model"], strict=True)
             net = net.to(dev)
-            dummy = torch.randn(1, 3, 160, 160, device=dev)
+            dummy = torch.randn(1, 3, INPUT_SIZE, INPUT_SIZE, device=dev)
             with torch.inference_mode():
                 for _ in range(2):
                     net(dummy)
@@ -200,8 +201,8 @@ def main() -> None:
                 h, w = frame.shape[:2]
                 tr = teacher.process_bgr(frame)
                 if tr.ok and tr.landmarks_norm is not None:
-                    kp = extract_10_points_pixel(tr.landmarks_norm, w, h)
-                    vis = draw_hand_10(frame, kp, radius=4)
+                    kp = extract_21_points_pixel(tr.landmarks_norm[:, :2], w, h)
+                    vis = draw_hand_21(frame, kp, radius=4)
                 else:
                     vis = frame
                 tick_fps()
@@ -219,7 +220,7 @@ def main() -> None:
         def infer_frame(lb_img, lb) -> None:
             nonlocal last_kp
             if ort_session is not None:
-                inp = bgr160_to_nchw_batch(lb_img)
+                inp = bgr_letterbox_to_nchw_batch(lb_img)
                 out = ort_session.run(None, {ort_in_name: inp})
                 lx, ly = out[0], out[1]
                 xy = decode_simcc_soft_argmax_numpy(lx, ly)
@@ -229,7 +230,7 @@ def main() -> None:
                 with torch.inference_mode():
                     lx, ly = net(inp)
                     xy = decode_torch(lx, ly)[0].cpu().numpy()
-            last_kp = keypoints_160_to_frame(xy, lb)
+            last_kp = keypoints_square_to_frame(xy, lb)
 
         while True:
             ok, frame = cap.read()
@@ -238,11 +239,11 @@ def main() -> None:
             fcount += 1
             run = last_kp is None or (fcount % ie == 0)
             if run:
-                lb_img, lb = letterbox_image(frame, 160)
+                lb_img, lb = letterbox_image(frame, INPUT_SIZE)
                 infer_frame(lb_img, lb)
 
             if last_kp is not None:
-                vis = draw_hand_10(frame, last_kp, radius=4)
+                vis = draw_hand_21(frame, last_kp, radius=4)
                 if keypoints_collapsed(last_kp, frame.shape):
                     if not collapsed_warn:
                         collapsed_warn = True

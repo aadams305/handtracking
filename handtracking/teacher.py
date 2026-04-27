@@ -40,6 +40,7 @@ class MediaPipeTeacher:
             urllib.request.urlretrieve(url, model_path)
 
         self._mp = mp
+        print("MediaPipe: initializing HandLandmarker (imports + model load can take several minutes)…", flush=True)
         base_options = python.BaseOptions(model_asset_path=model_path)
         options = vision.HandLandmarkerOptions(
             base_options=base_options,
@@ -48,6 +49,7 @@ class MediaPipeTeacher:
             min_hand_presence_confidence=min_tracking_confidence,
         )
         self._detector = vision.HandLandmarker.create_from_options(options)
+        print("MediaPipe: HandLandmarker ready.", flush=True)
 
     def close(self) -> None:
         self._detector.close()

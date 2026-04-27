@@ -45,7 +45,14 @@ def distill_images(
         image_paths = random.sample(image_paths, min(max_samples, len(image_paths)))
     samples: list[DistilledSample] = []
     with MediaPipeTeacher() as teacher:
-        for p in tqdm(image_paths, desc="distill"):
+        print("MediaPipe ready; distilling with progress bar…", flush=True)
+        for p in tqdm(
+            image_paths,
+            desc="distill",
+            file=sys.stderr,
+            mininterval=1.0,
+            dynamic_ncols=True,
+        ):
             img = cv2.imread(str(p))
             if img is None:
                 continue
@@ -115,7 +122,12 @@ def main() -> None:
         paths = [root]
     elif (root / "training" / "rgb").is_dir() or (root / "rgb").is_dir():
         rgb = find_freihand_rgb_dir(root)
-        paths = sorted(rgb.glob("*.jpg")) + sorted(rgb.glob("*.png"))
+        print(f"Globbing images under {rgb} (no sort — large FreiHAND sets can take 1–5 min)…", flush=True)
+        jp = list(rgb.glob("*.jpg"))
+        print(f"  {len(jp)} .jpg", flush=True)
+        pn = list(rgb.glob("*.png"))
+        print(f"  {len(pn)} .png", flush=True)
+        paths = jp + pn
     else:
         paths = sorted(root.glob(args.glob))
         if not paths:
@@ -125,8 +137,17 @@ def main() -> None:
         print(f"No images found under {root}", file=sys.stderr)
         sys.exit(1)
 
+    n_img = len(paths)
+    print(f"Found {n_img} image files under {root}.", flush=True)
+    if args.max_samples:
+        print(f"Using --max-samples {args.max_samples} (random subset).", flush=True)
+    print(
+        "Loading MediaPipe Hand Landmarker (first run may download ~10 MB and take several minutes; no tqdm yet).",
+        flush=True,
+    )
+
     n = distill_images(paths, args.out, max_samples=args.max_samples, seed=args.seed)
-    print(f"Wrote {n} samples to {args.out}")
+    print(f"Wrote {n} samples to {args.out}", flush=True)
 
 
 if __name__ == "__main__":

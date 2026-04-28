@@ -9,6 +9,28 @@ from handtracking.topology import NUM_HAND_JOINTS
 
 NUM_JOINTS = NUM_HAND_JOINTS
 
+# Cached for live decode (avoid reallocating bins / mean / std every frame)
+_BIN_CACHE: dict[tuple[int, int], np.ndarray] = {}
+_IMAGENET_CHW: tuple[np.ndarray, np.ndarray] | None = None
+
+
+def _bins_f32(num_bins: int, input_size: float) -> np.ndarray:
+    key = (num_bins, int(round(float(input_size) * 1000)))
+    if key not in _BIN_CACHE:
+        _BIN_CACHE[key] = np.arange(num_bins, dtype=np.float32) * (
+            np.float32(input_size) / np.float32(num_bins)
+        )
+    return _BIN_CACHE[key]
+
+
+def _imagenet_mean_std() -> tuple[np.ndarray, np.ndarray]:
+    global _IMAGENET_CHW
+    if _IMAGENET_CHW is None:
+        mean = np.array([0.485, 0.456, 0.406], dtype=np.float32).reshape(3, 1, 1)
+        std = np.array([0.229, 0.224, 0.225], dtype=np.float32).reshape(3, 1, 1)
+        _IMAGENET_CHW = (mean, std)
+    return _IMAGENET_CHW
+
 
 def softmax(x: np.ndarray, axis: int = -1) -> np.ndarray:
     x = x - np.max(x, axis=axis, keepdims=True)
@@ -28,20 +50,21 @@ def decode_simcc_soft_argmax_numpy(
     if lx.ndim == 3:
         lx = lx[0]
         ly = ly[0]
-    bins = np.arange(num_bins, dtype=np.float32) * (input_size / float(num_bins))
-    px = softmax(lx.astype(np.float32), axis=-1)
-    py = softmax(ly.astype(np.float32), axis=-1)
-    x_coord = np.sum(px * bins[None, :], axis=-1)
-    y_coord = np.sum(py * bins[None, :], axis=-1)
+    bins = _bins_f32(num_bins, float(input_size))
+    lx32 = np.asarray(lx, dtype=np.float32)
+    ly32 = np.asarray(ly, dtype=np.float32)
+    px = softmax(lx32, axis=-1)
+    py = softmax(ly32, axis=-1)
+    x_coord = (px * bins[None, :]).sum(axis=-1)
+    y_coord = (py * bins[None, :]).sum(axis=-1)
     return np.stack([x_coord, y_coord], axis=-1)
 
 
 def bgr_letterbox_to_nchw_batch(img_bgr: np.ndarray) -> np.ndarray:
     """uint8 BGR ``H×H`` letterbox (e.g. 256×256) -> float32 NCHW (1,3,H,H) ImageNet norm."""
-    rgb = img_bgr[:, :, ::-1].astype(np.float32) / 255.0
+    rgb = img_bgr[:, :, ::-1].astype(np.float32) * (1.0 / 255.0)
     ch = np.transpose(rgb, (2, 0, 1))
-    mean = np.array([0.485, 0.456, 0.406], dtype=np.float32).reshape(3, 1, 1)
-    std = np.array([0.229, 0.224, 0.225], dtype=np.float32).reshape(3, 1, 1)
+    mean, std = _imagenet_mean_std()
     x = (ch - mean) / std
     return np.expand_dims(x, 0)
 

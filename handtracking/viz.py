@@ -72,17 +72,20 @@ def draw_hand_21(
     radius: int = 3,
     color_pt: Tuple[int, int, int] = (0, 255, 0),
     color_edge: Tuple[int, int, int] = (255, 128, 0),
+    *,
+    line_type: int | None = None,
 ) -> np.ndarray:
     import cv2
 
+    lt = cv2.LINE_AA if line_type is None else line_type
     out = image_bgr.copy()
     n = keypoints_xy.shape[0]
     for i, j in EDGES_21:
         if i < n and j < n:
             p1 = (int(keypoints_xy[i, 0]), int(keypoints_xy[i, 1]))
             p2 = (int(keypoints_xy[j, 0]), int(keypoints_xy[j, 1]))
-            cv2.line(out, p1, p2, color_edge, 1, cv2.LINE_AA)
+            cv2.line(out, p1, p2, color_edge, 1, lt)
     for k in range(n):
         c = (int(keypoints_xy[k, 0]), int(keypoints_xy[k, 1]))
-        cv2.circle(out, c, radius, color_pt, -1, cv2.LINE_AA)
+        cv2.circle(out, c, radius, color_pt, -1, lt)
     return out

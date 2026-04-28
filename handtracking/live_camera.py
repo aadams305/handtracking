@@ -4,13 +4,14 @@ Live USB camera: V4L2 + MJPG + hand overlay (teacher=MediaPipe, student=SimCC).
 Student mode
   - **Green blob**: toy/demo weights collapse to the letterbox center — train on real
     data; on-screen banner when this is detected.
-  - **FPS**: use `--backend onnx` + `onnxruntime` and `--infer-every 8` for smoother video.
+  - **FPS**: `--backend onnx`, `--infer-every 8` (fewer runs/sec), `--preview-max-width 960`
+    (smaller window), and CUDA ORT if available.
 
 Usage
   PYTHONPATH=. python3 -m handtracking.live_camera --source teacher
   PYTHONPATH=. python3 -m handtracking.export_onnx --checkpoint checkpoints/hand_simcc.pt
   pip install onnxruntime
-  PYTHONPATH=. python3 -m handtracking.live_camera --source student --backend onnx --infer-every 8
+  PYTHONPATH=. python3 -m handtracking.live_camera --source student --backend onnx --infer-every 8 --preview-max-width 960
 
 Press 'q' to quit.
 """
@@ -26,7 +27,7 @@ import cv2
 import numpy as np
 
 from handtracking.dataset import normalize_bgr_tensor
-from handtracking.geometry import letterbox_image
+from handtracking.geometry import letterbox_image, map_keypoints_lb_to_src
 from handtracking.models.hand_simcc import INPUT_SIZE
 from handtracking.simcc_numpy import (
     bgr_letterbox_to_nchw_batch,
@@ -35,16 +36,6 @@ from handtracking.simcc_numpy import (
 )
 from handtracking.teacher import MediaPipeTeacher, extract_21_points_pixel
 from handtracking.viz import draw_hand_21
-
-
-def keypoints_square_to_frame(kp_square: np.ndarray, lb) -> np.ndarray:
-    """``(J,2)`` in ``INPUT_SIZE``×``INPUT_SIZE`` letterbox space -> full-frame pixels."""
-    out = np.empty_like(kp_square)
-    for i in range(kp_square.shape[0]):
-        out[i, 0], out[i, 1] = lb.map_xy_dst_to_src(
-            float(kp_square[i, 0]), float(kp_square[i, 1])
-        )
-    return out
 
 
 def open_capture(camera: int, width: int, height: int, fps: int) -> cv2.VideoCapture:
@@ -96,8 +87,20 @@ def main() -> None:
         help="Student: onnxruntime (faster CPU) or PyTorch",
     )
     ap.add_argument("--device", choices=("cpu", "cuda"), default="cpu")
-    ap.add_argument("--infer-every", type=int, default=6, metavar="N")
+    ap.add_argument(
+        "--infer-every",
+        type=int,
+        default=8,
+        metavar="N",
+        help="Student: run model every N frames (higher N = higher display FPS, jumpier overlay)",
+    )
     ap.add_argument("--threads", type=int, default=0)
+    ap.add_argument(
+        "--preview-max-width",
+        type=int,
+        default=0,
+        help="If >0, resize preview for imshow only (faster UI); 0 = full camera resolution",
+    )
     args = ap.parse_args()
 
     ort_session = None
@@ -113,14 +116,15 @@ def main() -> None:
 
             so = ort.SessionOptions()
             so.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
-            nthr = args.threads if args.threads > 0 else min(4, max(1, (os.cpu_count() or 4)))
+            nthr = args.threads if args.threads > 0 else min(8, max(1, (os.cpu_count() or 4)))
             so.intra_op_num_threads = nthr
             so.inter_op_num_threads = 1
-            ort_session = ort.InferenceSession(
-                str(args.onnx.resolve()),
-                so,
-                providers=["CPUExecutionProvider"],
-            )
+            avail = ort.get_available_providers()
+            prov: list[str] = []
+            if "CUDAExecutionProvider" in avail:
+                prov.append("CUDAExecutionProvider")
+            prov.append("CPUExecutionProvider")
+            ort_session = ort.InferenceSession(str(args.onnx.resolve()), so, providers=prov)
             ort_in_name = ort_session.get_inputs()[0].name
             print(f"Student: ONNX Runtime <- {args.onnx} (input={ort_in_name})")
         elif want_onnx:
@@ -142,9 +146,13 @@ def main() -> None:
             )
             if not args.checkpoint.is_file():
                 raise SystemExit(f"Missing checkpoint {args.checkpoint}")
-            nthr = args.threads if args.threads > 0 else min(4, max(1, (os.cpu_count() or 4)))
+            nthr = args.threads if args.threads > 0 else min(8, max(1, (os.cpu_count() or 4)))
             torch.set_num_threads(nthr)
             cv2.setNumThreads(1)
+            try:
+                torch.set_float32_matmul_precision("high")
+            except Exception:
+                pass
             try:
                 ckpt = torch.load(args.checkpoint, map_location="cpu", weights_only=False)
             except TypeError:
@@ -161,6 +169,7 @@ def main() -> None:
                     net(dummy)
             print(f"Student: PyTorch on {dev}")
 
+    cv2.setUseOptimized(True)
     cap = open_capture(args.camera, args.width, args.height, args.fps)
     if not cap.isOpened():
         raise SystemExit(f"Cannot open camera index {args.camera}.")
@@ -230,7 +239,7 @@ def main() -> None:
                 with torch.inference_mode():
                     lx, ly = net(inp)
                     xy = decode_torch(lx, ly)[0].cpu().numpy()
-            last_kp = keypoints_square_to_frame(xy, lb)
+            last_kp = map_keypoints_lb_to_src(lb, xy.astype(np.float32, copy=False))
 
         while True:
             ok, frame = cap.read()
@@ -243,7 +252,12 @@ def main() -> None:
                 infer_frame(lb_img, lb)
 
             if last_kp is not None:
-                vis = draw_hand_21(frame, last_kp, radius=4)
+                vis = draw_hand_21(
+                    frame,
+                    last_kp,
+                    radius=4,
+                    line_type=cv2.LINE_8,
+                )
                 if keypoints_collapsed(last_kp, frame.shape):
                     if not collapsed_warn:
                         collapsed_warn = True
@@ -261,6 +275,11 @@ def main() -> None:
                     )
             else:
                 vis = frame
+
+            if args.preview_max_width > 0 and vis.shape[1] > args.preview_max_width:
+                pw = args.preview_max_width
+                ph = int(round(vis.shape[0] * (pw / float(vis.shape[1]))))
+                vis = cv2.resize(vis, (pw, ph), interpolation=cv2.INTER_AREA)
 
             tick_fps()
             cv2.imshow(win, vis)

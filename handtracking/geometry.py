@@ -35,7 +35,16 @@ class Letterbox:
         return px, py
 
 
-def letterbox_params(src_w: int, src_h: int, dst: int = 160) -> Letterbox:
+def map_keypoints_lb_to_src(lb: Letterbox, kp_lb: np.ndarray) -> np.ndarray:
+    """Vectorized ``map_xy_dst_to_src``: ``kp_lb`` ``(J,2)`` in letterbox pixels -> ``(J,2)`` source pixels."""
+    inv = 1.0 / float(lb.scale)
+    out = np.empty_like(kp_lb, dtype=np.float32)
+    out[:, 0] = (kp_lb[:, 0].astype(np.float32) - np.float32(lb.pad_x)) * np.float32(inv)
+    out[:, 1] = (kp_lb[:, 1].astype(np.float32) - np.float32(lb.pad_y)) * np.float32(inv)
+    return out
+
+
+def letterbox_params(src_w: int, src_h: int, dst: int = 256) -> Letterbox:
     scale = min(dst / src_w, dst / src_h)
     nw = int(round(src_w * scale))
     nh = int(round(src_h * scale))

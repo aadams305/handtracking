@@ -1,8 +1,12 @@
 import cv2
 
-# Trained SimCC + overlay (slow on CPU) or MediaPipe teacher (smooth), same camera settings:
-#   PYTHONPATH=. python3 -m handtracking.live_camera --camera 0 --source teacher
-#   PYTHONPATH=. python3 -m handtracking.live_camera --source student --infer-every 3
+# Raw camera test (this file). For SimCC student only (ONNX or PyTorch), same V4L2/MJPG style as below:
+#   PYTHONPATH=. python3 camera_student.py --backend onnx
+#   PYTHONPATH=. python3 camera_student.py --backend pytorch --device cuda
+#
+# Optional: MediaPipe teacher or student via package:
+#   PYTHONPATH=. python3 -m handtracking.live_camera --source teacher
+#   PYTHONPATH=. python3 -m handtracking.live_camera --source student --backend onnx --infer-every 3
 
 def main():
     # Initialize camera using V4L2 backend as in the original script

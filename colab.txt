@@ -13,7 +13,7 @@ import os
 
 drive.mount("/content/drive")
 
-BACKUP = "/content/drive/MyDrive/handtracking7"
+BACKUP = "/content/drive/MyDrive/handtracking8"
 os.makedirs(BACKUP, exist_ok=True)
 print("Drive mounted; backup dir:", BACKUP)
 
@@ -128,15 +128,15 @@ print("OK: INPUT_SIZE=", INPUT_SIZE, "NUM_BINS=", NUM_BINS, "NUM_JOINTS=", NUM_J
 # Block 6 — Copy checkpoints to Drive
 # =============================================================================
 %cd /content/handtracking
-!test -d checkpoints && cp -r checkpoints /content/drive/MyDrive/handtracking7/ || echo "No checkpoints/ folder; run Block 5 first."
+!test -d checkpoints && cp -r checkpoints /content/drive/MyDrive/handtracking8/ || echo "No checkpoints/ folder; run Block 5 first."
 print("Done Block 6.")
 
 # =============================================================================
 # Block 7 — Zip project to Drive (large: includes data + zip + checkpoints)
 # =============================================================================
 %cd /content
-!test -d handtracking && zip -rq /content/drive/MyDrive/handtracking7/handtr.zip handtracking || echo "Missing /content/handtracking"
-print("If zip succeeded, handtr.zip is under handtracking7 on Drive.")
+!test -d handtracking && zip -rq /content/drive/MyDrive/handtracking8/handtr.zip handtracking || echo "Missing /content/handtracking"
+print("If zip succeeded, handtr.zip is under handtracking8 on Drive.")
 
 # Optional ONNX export (FP32 checkpoint only):
 # %cd /content/handtracking

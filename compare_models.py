@@ -110,9 +110,25 @@ def main():
     axs[1].set_title("MobileNetV4 SimCC (Predicted)")
     axs[1].axis('off')
     
-    out_path = "/home/aidan/.gemini/antigravity/brain/bca659aa-0337-4138-a674-af4bda8f5ef4/comparison.png"
+    out_path = "/home/aidan/.gemini/antigravity/brain/75ebae8f-2e05-4ae4-939a-a4a08439d809/artifacts/comparison.png"
     plt.savefig(out_path, bbox_inches='tight', dpi=150)
     print(f"Saved exact comparison to artifacts!")
     
+if __name__ == "__main__":
+    main()
+
+    src = f"live cam {args.camera}" if args.live else str(args.image)
+    dist = np.linalg.norm(pred_lb - gt_lb, axis=1)
+    worst = int(dist.argmax())
+    fig.suptitle(
+        f"{src}  |  MPJPE (letterbox px)={dist.mean():.2f}  worst={HAND_21_NAMES[worst]} ({dist[worst]:.1f}px)",
+        fontsize=10,
+    )
+    fig.tight_layout()
+    args.out.parent.mkdir(parents=True, exist_ok=True)
+    plt.savefig(args.out, bbox_inches="tight", dpi=150)
+    print(f"Wrote {args.out.resolve()}")
+
+
 if __name__ == "__main__":
     main()

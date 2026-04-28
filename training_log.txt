@@ -1,0 +1,9 @@
+Using device: cpu
+Dataset: 7279 samples
+Model parameters: 789,136
+[0;93m2026-04-28 06:22:30.410936504 [W:onnxruntime:Default, device_discovery.cc:164 DiscoverDevicesForPlatform] GPU device discovery failed: device_discovery.cc:89 ReadFileContents Failed to open file: "/sys/class/drm/card1/device/vendor"[m
+epoch 1/100 (fp32) loss=21.064860 lr=0.000060 *best*
+epoch 2/100 (fp32) loss=20.319209 lr=0.000120 *best*
+epoch 3/100 (fp32) loss=20.173504 lr=0.000180 *best*
+epoch 4/100 (fp32) loss=20.071774 lr=0.000240 *best*
+epoch 5/100 (fp32) loss=19.990311 lr=0.000300 *best*

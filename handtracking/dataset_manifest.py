@@ -25,12 +25,16 @@ class DistilledSample:
     image_path: str
     letterbox: LetterboxMeta
     keypoints_xy: List[List[float]]  # NUM_HAND_JOINTS x 2 in [0, dst)
+    handedness: Optional[str] = None  # "Left" or "Right" from MediaPipe, None if unknown
+    has_hand: bool = True  # False for negative samples (no hand in frame)
 
     def to_json_line(self) -> str:
         d = {
             "image_path": self.image_path,
             "letterbox": asdict(self.letterbox),
             "keypoints_xy": self.keypoints_xy,
+            "handedness": self.handedness,
+            "has_hand": self.has_hand,
         }
         return json.dumps(d, separators=(",", ":"))
 
@@ -42,6 +46,8 @@ class DistilledSample:
             image_path=d["image_path"],
             letterbox=lb,
             keypoints_xy=d["keypoints_xy"],
+            handedness=d.get("handedness"),
+            has_hand=d.get("has_hand", True),
         )
 
 

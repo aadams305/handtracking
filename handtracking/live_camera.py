@@ -33,6 +33,7 @@ from handtracking.simcc_numpy import (
     bgr_letterbox_to_nchw_batch,
     decode_simcc_soft_argmax_numpy,
     keypoints_collapsed,
+    simcc_confidence_numpy,
 )
 from handtracking.teacher import MediaPipeTeacher, extract_21_points_pixel
 from handtracking.viz import draw_hand_21
@@ -220,24 +221,46 @@ def main() -> None:
                     break
     else:
         last_kp: np.ndarray | None = None
+        last_conf: float = 0.0
+        last_hand_str: str = ""
         fcount = 0
         ie = max(1, args.infer_every)
         collapsed_warn = False
+        conf_threshold = 0.08  # below this, suppress keypoints (no hand)
         if ort_session is None:
             import torch
 
         def infer_frame(lb_img, lb) -> None:
-            nonlocal last_kp
+            nonlocal last_kp, last_conf, last_hand_str
             if ort_session is not None:
                 inp = bgr_letterbox_to_nchw_batch(lb_img)
                 out = ort_session.run(None, {ort_in_name: inp})
                 lx, ly = out[0], out[1]
                 xy = decode_simcc_soft_argmax_numpy(lx, ly)
+                last_conf = simcc_confidence_numpy(lx, ly)
+                # Check for presence/handedness outputs from ONNX model
+                if len(out) >= 4:
+                    pres_sigmoid = 1.0 / (1.0 + np.exp(-float(out[2].flat[0])))
+                    hand_sigmoid = 1.0 / (1.0 + np.exp(-float(out[3].flat[0])))
+                    last_conf = pres_sigmoid  # use learned presence instead
+                    last_hand_str = "Right" if hand_sigmoid > 0.5 else "Left"
+                else:
+                    last_hand_str = ""
             else:
                 assert net is not None and decode_torch is not None and dev is not None
                 inp = normalize_bgr_tensor(lb_img).unsqueeze(0).to(dev)
                 with torch.inference_mode():
-                    lx, ly = net(inp)
+                    out = net(inp)
+                    if len(out) == 4:
+                        lx, ly, pres_logit, hand_logit = out
+                        last_conf = float(torch.sigmoid(pres_logit).item())
+                        hand_p = float(torch.sigmoid(hand_logit).item())
+                        last_hand_str = "Right" if hand_p > 0.5 else "Left"
+                    else:
+                        lx, ly = out
+                        from handtracking.models.hand_simcc import simcc_confidence
+                        last_conf = float(simcc_confidence(lx, ly).item())
+                        last_hand_str = ""
                     xy = decode_torch(lx, ly)[0].cpu().numpy()
             last_kp = map_keypoints_lb_to_src(lb, xy.astype(np.float32, copy=False))
 
@@ -251,12 +274,22 @@ def main() -> None:
                 lb_img, lb = letterbox_image(frame, INPUT_SIZE)
                 infer_frame(lb_img, lb)
 
-            if last_kp is not None:
+            vis = frame
+            if last_kp is not None and last_conf >= conf_threshold:
                 vis = draw_hand_21(
                     frame,
                     last_kp,
                     radius=4,
                     line_type=cv2.LINE_8,
+                )
+                # Show confidence and handedness
+                info_lines = [f"conf={last_conf:.2f}"]
+                if last_hand_str:
+                    info_lines.append(last_hand_str)
+                info_text = "  ".join(info_lines)
+                cv2.putText(
+                    vis, info_text, (10, vis.shape[0] - 15),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 200), 1, cv2.LINE_AA,
                 )
                 if keypoints_collapsed(last_kp, frame.shape):
                     if not collapsed_warn:
@@ -273,8 +306,6 @@ def main() -> None:
                             "Use: --source teacher  for working landmarks.",
                         ],
                     )
-            else:
-                vis = frame
 
             if args.preview_max_width > 0 and vis.shape[1] > args.preview_max_width:
                 pw = args.preview_max_width

@@ -80,6 +80,8 @@ def distill_images(
                     image_path=str(p.resolve()),
                     letterbox=meta,
                     keypoints_xy=kp_dst.tolist(),
+                    handedness=tr.handedness,
+                    has_hand=True,
                 )
             )
     write_manifest(samples, out_manifest)

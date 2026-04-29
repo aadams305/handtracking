@@ -27,7 +27,8 @@ def main() -> None:
             "Checkpoint is QAT/INT8; export from .fp32.pt (saved before convert) instead."
         )
     model = HandSimCCNet(width_mult=wm)
-    model.load_state_dict(ckpt["model"], strict=True)
+    # strict=False: old checkpoints lack aux_head (presence/handedness) weights
+    model.load_state_dict(ckpt["model"], strict=False)
     model.eval()
 
     dummy = torch.randn(1, 3, INPUT_SIZE, INPUT_SIZE)
@@ -41,7 +42,7 @@ def main() -> None:
         dummy,
         str(args.out),
         input_names=["input"],
-        output_names=["simcc_x", "simcc_y"],
+        output_names=["simcc_x", "simcc_y", "presence", "handedness"],
         opset_version=args.opset,
         dynamic_axes=None,
     )

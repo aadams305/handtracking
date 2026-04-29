@@ -60,6 +60,32 @@ def decode_simcc_soft_argmax_numpy(
     return np.stack([x_coord, y_coord], axis=-1)
 
 
+def simcc_confidence_numpy(
+    lx: np.ndarray,
+    ly: np.ndarray,
+) -> float:
+    """Compute confidence from SimCC logit peakedness (numpy version).
+
+    Returns a float in roughly [0, 1]. High values mean the model is confident
+    about joint locations (peaked distributions). Low values mean near-uniform
+    distributions (likely no hand in frame).
+
+    Works on raw logits — no extra model head needed.
+    """
+    if lx.ndim == 3:
+        lx = lx[0]
+        ly = ly[0]
+    px = softmax(lx, axis=-1)
+    py = softmax(ly, axis=-1)
+    peak_x = np.mean(np.max(px, axis=-1))
+    peak_y = np.mean(np.max(py, axis=-1))
+    num_bins = lx.shape[-1]
+    raw = (peak_x + peak_y) / 2.0
+    floor = 1.0 / num_bins
+    conf = float((raw - floor) / (1.0 - floor))
+    return max(0.0, min(1.0, conf))
+
+
 def bgr_letterbox_to_nchw_batch(img_bgr: np.ndarray) -> np.ndarray:
     """uint8 BGR ``H×H`` letterbox (e.g. 256×256) -> float32 NCHW (1,3,H,H) ImageNet norm."""
     rgb = img_bgr[:, :, ::-1].astype(np.float32) * (1.0 / 255.0)

@@ -91,13 +91,12 @@ def random_scale_crop(
     return img_out, kp_out.astype(np.float32)
 
 
-# Left-right hand joint swap indices for horizontal flip (21-joint topology)
-# When flipping horizontally, we don't need to swap joint identities because
-# a left hand flipped becomes a right hand — the topology stays the same.
-# We just flip x coordinates.
-
-
 class HandSimCCDataset(Dataset):
+    """Dataset returning (image, keypoints, has_hand, handedness_label).
+
+    handedness_label: 0.0 = Left, 1.0 = Right, 0.5 = unknown
+    has_hand: 1.0 if hand present, 0.0 if negative sample
+    """
     def __init__(
         self,
         manifest_path: Path,
@@ -111,7 +110,7 @@ class HandSimCCDataset(Dataset):
     def __len__(self) -> int:
         return len(self.rows)
 
-    def __getitem__(self, idx: int) -> tuple[torch.Tensor, torch.Tensor]:
+    def __getitem__(self, idx: int) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         s = self.rows[idx]
         img = cv2.imread(s.image_path)
         if img is None:
@@ -128,6 +127,18 @@ class HandSimCCDataset(Dataset):
                 f"{s.image_path}: manifest has {kp.shape[0]} keypoints; "
                 f"expected {NUM_HAND_JOINTS}. Re-run handtracking.distill_freihand."
             )
+
+        # Handedness: Left=0, Right=1, unknown=0.5
+        if s.handedness == "Right":
+            hand_label = 1.0
+        elif s.handedness == "Left":
+            hand_label = 0.0
+        else:
+            hand_label = 0.5  # unknown / don't supervise
+
+        # Presence: all manifest samples have hands (has_hand defaults to True)
+        has_hand = 1.0 if s.has_hand else 0.0
+
         if self.augment:
             # Color jitter for domain robustness
             lb_img = color_jitter(lb_img, p=0.5)
@@ -139,12 +150,21 @@ class HandSimCCDataset(Dataset):
             # Random scale for handling different hand sizes
             lb_img, kp = random_scale_crop(lb_img, kp, p=0.4)
 
-            # Horizontal flip (hand topology is symmetric)
+            # Horizontal flip — swaps handedness (left ↔ right)
             if self._rng.random() < 0.5:
                 lb_img = cv2.flip(lb_img, 1)
                 kp[:, 0] = INPUT_SIZE - 1 - kp[:, 0]
+                # Swap handedness on flip
+                if hand_label == 0.0:
+                    hand_label = 1.0
+                elif hand_label == 1.0:
+                    hand_label = 0.0
+                # 0.5 stays 0.5
 
             lb_img = cutout(lb_img, kp, p=0.4)
+
         inp = normalize_bgr_tensor(lb_img)
         target = torch.from_numpy(kp)
-        return inp, target
+        has_hand_t = torch.tensor(has_hand, dtype=torch.float32)
+        hand_label_t = torch.tensor(hand_label, dtype=torch.float32)
+        return inp, target, has_hand_t, hand_label_t

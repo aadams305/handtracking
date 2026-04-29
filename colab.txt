@@ -1,9 +1,9 @@
-# Google Colab: FreiHAND distill + SimCC training (256x256, 21 joints, 256 bins)
+# Google Colab: SimCC training (256x256, 21 joints, 256 bins)
+# Assuming distillation is done locally and manifest.jsonl is uploaded to Google Drive.
 #
 # Tips
-#   - Runtime -> Change runtime type -> GPU (T4 or better) for training; distill is mostly CPU.
+#   - Runtime -> Change runtime type -> GPU (T4 or better) for training.
 #   - Paste each "Block" into its own Colab cell (especially %%bash must be alone in a cell).
-#   - Repo must include the SimCC rewrite (conv head, SimCCGaussianSoftCELoss). If asserts fail, git pull main.
 #
 # =============================================================================
 # Block 1 — Mount Drive and backup folder
@@ -26,12 +26,10 @@ print("Drive mounted; backup dir:", BACKUP)
 !git clone https://github.com/aadams305/handtracking.git
 %cd /content/handtracking
 
-# Install package. Colab already ships CUDA torch; avoid replacing it with a CPU build:
-#   If `import torch; torch.cuda.is_available()` becomes False after install, reinstall CUDA torch from
-#   https://pytorch.org/get-started/locally/ then re-run only `pip install -e .`.
 !pip install -q -e . --no-deps
 !pip install -q mediapipe opencv-python-headless numpy tqdm onnx onnxruntime onnxsim Pillow
 
+# Download FreiHAND images to Colab so the training has the actual images
 !wget -nc https://lmb.informatik.uni-freiburg.de/data/freihand/FreiHAND_pub_v2.zip
 !mkdir -p data/freihand
 !unzip -q -o FreiHAND_pub_v2.zip -d data/freihand
@@ -41,48 +39,35 @@ print("Drive mounted; backup dir:", BACKUP)
 !python3 -c "import torch; print('cuda_available=', torch.cuda.is_available())"
 
 # =============================================================================
-# Block 3 — Distill (MediaPipe teacher -> manifest JSONL)
+# Block 3 — Prepare the Distilled Manifest from Google Drive
 # =============================================================================
-# Full FreiHAND + MediaPipe on CPU can take many hours. Use --max-samples for a quick test.
-# See distill_freihand progress messages + tqdm (python -u + PYTHONUNBUFFERED).
+# We need to copy the manifest you created locally to Colab, then update the image paths
+# to point to the Colab FreiHAND directory instead of your local PC directory.
 
 %%bash
 set -e
 cd /content/handtracking
-if [ -d "data/freihand/training/rgb" ]; then
-  DR="data/freihand"
-elif [ -d "data/freihand/FreiHAND_pub_v2/training/rgb" ]; then
-  DR="data/freihand/FreiHAND_pub_v2"
-else
-  echo "Could not find training/rgb. Listing data/freihand/training (if present):"
-  ls -la data/freihand/training 2>/dev/null || true
-  find data/freihand -maxdepth 4 -type d 2>/dev/null | head -50
-  exit 1
-fi
-echo "Using data-root: $DR"
-ls -la "$DR/training/rgb" | head
-N=$(find "$DR/training/rgb" -maxdepth 1 -name '*.jpg' 2>/dev/null | wc -l)
-echo "JPG count under training/rgb: $N"
-export PYTHONUNBUFFERED=1
-# Full run (very long on CPU):
-python3 -u -m handtracking.distill_freihand --data-root "$DR" --out data/distilled/manifest.jsonl
-# Quick test (uncomment instead of the line above):
-# python3 -u -m handtracking.distill_freihand --data-root "$DR" --out data/distilled/manifest.jsonl --max-samples 2000
+mkdir -p data/distilled
+
+# Copy your locally generated manifest.jsonl from Drive to Colab
+cp /content/drive/MyDrive/handtracking8/manifest.jsonl data/distilled/manifest.jsonl || echo "Please upload manifest.jsonl to MyDrive/handtracking8 first!"
+
+# Replace local path with Colab path in the manifest
+# E.g. replacing /home/aidan/simpleHand/dataset/drive-download-20260327T052607Z-3-001/FreiHAND with /content/handtracking/data/freihand
+sed -i 's|/home/aidan/simpleHand/dataset/drive-download-20260327T052607Z-3-001/FreiHAND|/content/handtracking/data/freihand|g' data/distilled/manifest.jsonl
+
+echo "Manifest paths updated. First few lines:"
+head -n 2 data/distilled/manifest.jsonl
 
 # =============================================================================
-# Block 4 — Sanity check (SimCC shapes + loss wiring in repo on disk)
+# Block 4 — Sanity check (SimCC shapes + presence/handedness head)
 # =============================================================================
-# IMPORTANT: model and input must live on the same device (.to(device)).
-# If you only put `x` on CUDA and not `m`, you get:
-#   RuntimeError: Input type (torch.cuda.FloatTensor) and weight type (torch.FloatTensor) should be the same
-
 %cd /content/handtracking
 import sys
 sys.path.insert(0, "/content/handtracking")
 
 import torch
 from pathlib import Path
-
 from handtracking.models.hand_simcc import HandSimCCNet, INPUT_SIZE, NUM_BINS, NUM_JOINTS
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -91,21 +76,13 @@ print("Using device:", device)
 m = HandSimCCNet(width_mult=0.5).eval().to(device)
 x = torch.randn(1, 3, INPUT_SIZE, INPUT_SIZE, device=device, dtype=torch.float32)
 with torch.inference_mode():
-    lx, ly = m(x)
+    lx, ly, pres, hand = m(x)
 assert lx.shape == (1, NUM_JOINTS, NUM_BINS), lx.shape
 assert ly.shape == (1, NUM_JOINTS, NUM_BINS), ly.shape
-assert hasattr(m.head, "conv_x") and hasattr(m.head, "conv_y"), "Expected conv SimCC head (no x_proj / FC bins)."
-
-ROOT = Path("/content/handtracking")
-train_src = (ROOT / "handtracking/train.py").read_text()
-assert "SimCCGaussianSoftCELoss" in train_src, "train.py should use SimCCGaussianSoftCELoss."
-assert "SimCCAdaptiveWingLoss" not in train_src, "Adaptive Wing was removed; git pull the latest repo."
-
-ds_src = (ROOT / "handtracking/dataset.py").read_text()
-assert "letterbox_image(img, INPUT_SIZE)" in ds_src, "Dataset should letterbox to INPUT_SIZE (256)."
+assert pres.shape == (1,), f"Presence shape: {pres.shape}"
+assert hand.shape == (1,), f"Handedness shape: {hand.shape}"
 
 print("OK: input", tuple(x.shape), "lx/ly", tuple(lx.shape), tuple(ly.shape))
-print("OK: INPUT_SIZE=", INPUT_SIZE, "NUM_BINS=", NUM_BINS, "NUM_JOINTS=", NUM_JOINTS)
 
 # =============================================================================
 # Block 5 — Train (omit --resume on first run; add --resume after disconnect)
@@ -117,27 +94,17 @@ print("OK: INPUT_SIZE=", INPUT_SIZE, "NUM_BINS=", NUM_BINS, "NUM_JOINTS=", NUM_J
 !PYTHONUNBUFFERED=1 python3 -u -m handtracking.train \
   --manifest data/distilled/manifest.jsonl \
   --epochs 100 \
-  --batch-size 16 \
-  --lr 1e-3 \
-  --lr-gamma 0.95 \
+  --batch-size 32 \
+  --lr 3e-4 \
+  --warmup-epochs 5 \
+  --sigma-bins 1.0 \
+  --coord-loss-weight 0.5 \
+  --num-workers 2 \
   --out checkpoints/hand_simcc.pt
 
-# !PYTHONUNBUFFERED=1 python3 -u -m handtracking.train --manifest data/distilled/manifest.jsonl --epochs 100 --batch-size 16 --out checkpoints/hand_simcc.pt --resume
-
 # =============================================================================
-# Block 6 — Copy checkpoints to Drive
+# Block 6 — Copy checkpoints back to Drive
 # =============================================================================
 %cd /content/handtracking
 !test -d checkpoints && cp -r checkpoints /content/drive/MyDrive/handtracking8/ || echo "No checkpoints/ folder; run Block 5 first."
-print("Done Block 6.")
-
-# =============================================================================
-# Block 7 — Zip project to Drive (large: includes data + zip + checkpoints)
-# =============================================================================
-%cd /content
-!test -d handtracking && zip -rq /content/drive/MyDrive/handtracking8/handtr.zip handtracking || echo "Missing /content/handtracking"
-print("If zip succeeded, handtr.zip is under handtracking8 on Drive.")
-
-# Optional ONNX export (FP32 checkpoint only):
-# %cd /content/handtracking
-# !python3 -u -m handtracking.export_onnx --checkpoint checkpoints/hand_simcc.pt --out models/hand_simcc.onnx
+print("Done Block 6. Checkpoints saved to your Google Drive!")

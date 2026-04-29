@@ -7,3 +7,56 @@ epoch 2/100 (fp32) loss=20.319209 lr=0.000120 *best*
 epoch 3/100 (fp32) loss=20.173504 lr=0.000180 *best*
 epoch 4/100 (fp32) loss=20.071774 lr=0.000240 *best*
 epoch 5/100 (fp32) loss=19.990311 lr=0.000300 *best*
+epoch 6/100 (fp32) loss=19.914005 lr=0.000300 *best*
+epoch 7/100 (fp32) loss=19.803593 lr=0.000300 *best*
+epoch 8/100 (fp32) loss=19.264844 lr=0.000299 *best*
+epoch 9/100 (fp32) loss=18.444676 lr=0.000299 *best*
+epoch 10/100 (fp32) loss=17.908051 lr=0.000298 *best*
+epoch 11/100 (fp32) loss=17.561163 lr=0.000297 *best*
+epoch 12/100 (fp32) loss=17.275420 lr=0.000296 *best*
+epoch 13/100 (fp32) loss=17.063995 lr=0.000295 *best*
+epoch 14/100 (fp32) loss=16.932871 lr=0.000293 *best*
+epoch 15/100 (fp32) loss=16.779084 lr=0.000292 *best*
+epoch 16/100 (fp32) loss=16.684385 lr=0.000290 *best*
+epoch 17/100 (fp32) loss=16.574474 lr=0.000288 *best*
+epoch 18/100 (fp32) loss=16.467554 lr=0.000286 *best*
+epoch 19/100 (fp32) loss=16.388810 lr=0.000284 *best*
+epoch 20/100 (fp32) loss=16.302142 lr=0.000282 *best*
+epoch 21/100 (fp32) loss=16.254656 lr=0.000280 *best*
+epoch 22/100 (fp32) loss=16.203970 lr=0.000277 *best*
+epoch 23/100 (fp32) loss=16.152314 lr=0.000274 *best*
+epoch 24/100 (fp32) loss=16.052246 lr=0.000271 *best*
+epoch 25/100 (fp32) loss=16.017502 lr=0.000268 *best*
+epoch 26/100 (fp32) loss=15.965094 lr=0.000265 *best*
+epoch 27/100 (fp32) loss=15.895762 lr=0.000262 *best*
+epoch 28/100 (fp32) loss=15.858644 lr=0.000259 *best*
+epoch 29/100 (fp32) loss=15.832518 lr=0.000255 *best*
+epoch 30/100 (fp32) loss=15.772558 lr=0.000252 *best*
+epoch 31/100 (fp32) loss=15.692844 lr=0.000248 *best*
+epoch 32/100 (fp32) loss=15.689063 lr=0.000244 *best*
+epoch 33/100 (fp32) loss=15.674492 lr=0.000240 *best*
+epoch 34/100 (fp32) loss=15.616651 lr=0.000236 *best*
+epoch 35/100 (fp32) loss=15.569654 lr=0.000232 *best*
+epoch 36/100 (fp32) loss=15.579865 lr=0.000228
+epoch 37/100 (fp32) loss=15.526263 lr=0.000224 *best*
+epoch 38/100 (fp32) loss=15.489334 lr=0.000219 *best*
+epoch 39/100 (fp32) loss=15.461450 lr=0.000215 *best*
+epoch 40/100 (fp32) loss=15.422934 lr=0.000211 *best*
+epoch 41/100 (fp32) loss=15.395907 lr=0.000206 *best*
+epoch 42/100 (fp32) loss=15.404922 lr=0.000201
+epoch 43/100 (fp32) loss=15.304983 lr=0.000197 *best*
+epoch 44/100 (fp32) loss=15.316028 lr=0.000192
+epoch 45/100 (fp32) loss=15.281699 lr=0.000187 *best*
+epoch 46/100 (fp32) loss=15.277324 lr=0.000182 *best*
+epoch 47/100 (fp32) loss=15.233907 lr=0.000178 *best*
+epoch 48/100 (fp32) loss=15.196607 lr=0.000173 *best*
+epoch 49/100 (fp32) loss=15.177011 lr=0.000168 *best*
+epoch 50/100 (fp32) loss=15.170084 lr=0.000163 *best*
+epoch 51/100 (fp32) loss=15.113531 lr=0.000158 *best*
+epoch 52/100 (fp32) loss=15.079541 lr=0.000153 *best*
+epoch 53/100 (fp32) loss=15.060196 lr=0.000148 *best*
+epoch 54/100 (fp32) loss=15.051275 lr=0.000143 *best*
+epoch 55/100 (fp32) loss=15.015637 lr=0.000138 *best*
+epoch 56/100 (fp32) loss=15.016163 lr=0.000133
+epoch 57/100 (fp32) loss=15.007091 lr=0.000128 *best*
+epoch 58/100 (fp32) loss=14.966794 lr=0.000123 *best*

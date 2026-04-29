@@ -71,12 +71,30 @@ def train_epoch(
     model.train()
     total = 0.0
     n = 0
-    for x, y in loader:
+    for batch in loader:
+        # Dataset returns (image, keypoints, has_hand, handedness)
+        if len(batch) == 4:
+            x, y, has_hand, hand_label = batch
+            has_hand = has_hand.to(device)
+            hand_label = hand_label.to(device)
+        else:
+            x, y = batch
+            has_hand = None
+            hand_label = None
+
         x = x.to(device)
         y = y.to(device)
         opt.zero_grad(set_to_none=True)
-        lx, ly = model(x)
-        loss = loss_fn(lx, ly, y)
+
+        # Model returns (lx, ly, presence_logit, handedness_logit) or just (lx, ly)
+        out = model(x)
+        if len(out) == 4:
+            lx, ly, pres_logit, hand_logit = out
+            loss = loss_fn(lx, ly, y, pres_logit, hand_logit, has_hand, hand_label)
+        else:
+            lx, ly = out
+            loss = loss_fn(lx, ly, y)
+
         loss.backward()
         # Gradient clipping to prevent exploding gradients
         if grad_clip > 0:

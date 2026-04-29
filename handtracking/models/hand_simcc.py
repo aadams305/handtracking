@@ -6,6 +6,10 @@ convs (X and Y) from backbone features to ``num_joints * num_bins`` channels, re
 to ``[B, J, num_bins, H, W]``, then **mean-pools over spatial** (H×W). Pooling averages
 the same per-bin logits across all spatial locations, which is standard when the
 backbone has not yet collapsed to a single cell (stride 32 → 8×8 on 256 input).
+
+Additionally includes:
+- **Presence head**: sigmoid confidence score [0, 1] — is a hand visible at all?
+- **Handedness head**: sigmoid score [0, 1] — 0 = Left, 1 = Right
 """
 
 from __future__ import annotations
@@ -46,6 +50,33 @@ def decode_simcc_soft_argmax(
     return torch.stack((ex, ey), dim=-1)
 
 
+def simcc_confidence(
+    lx: torch.Tensor,
+    ly: torch.Tensor,
+) -> torch.Tensor:
+    """Compute per-sample confidence from SimCC logit peakedness.
+
+    Returns ``[B]`` float in roughly [0, 1]. When the model is confident about
+    joint locations the softmax distributions are sharply peaked (high max prob).
+    When there is no hand the distributions are near-uniform (max ≈ 1/num_bins).
+
+    This works as a zero-cost confidence proxy without any additional head or
+    retraining — useful for gating output at inference time.
+    """
+    px = F.softmax(lx, dim=-1)  # [B, J, bins]
+    py = F.softmax(ly, dim=-1)
+    # Mean of max-probabilities across all joints and both axes
+    peak_x = px.max(dim=-1).values.mean(dim=-1)  # [B]
+    peak_y = py.max(dim=-1).values.mean(dim=-1)
+    # Normalize: uniform peak = 1/num_bins ≈ 0.004, strong peak ≈ 0.3-0.8
+    num_bins = lx.shape[-1]
+    raw = (peak_x + peak_y) / 2.0
+    # Map from [1/num_bins, 1] to [0, 1] roughly
+    floor = 1.0 / num_bins
+    conf = (raw - floor) / (1.0 - floor)
+    return conf.clamp(0.0, 1.0)
+
+
 class SimCCHead(nn.Module):
     """Per-axis 1×1 conv to ``J×num_bins`` logits, spatial mean → ``[B, J, num_bins]``."""
 
@@ -65,15 +96,55 @@ class SimCCHead(nn.Module):
         return x, y
 
 
+class PresenceHandednessHead(nn.Module):
+    """Lightweight head predicting hand presence (sigmoid) and handedness (sigmoid).
+
+    Architecture: GAP → FC(in, 32) → ReLU → FC(32, 2) → [presence_logit, handedness_logit]
+    Presence:   sigmoid(out[0]) → confidence that a hand is in frame
+    Handedness: sigmoid(out[1]) → 0 = Left, 1 = Right (only meaningful when presence > threshold)
+    """
+
+    def __init__(self, in_channels: int) -> None:
+        super().__init__()
+        self.pool = nn.AdaptiveAvgPool2d(1)
+        self.fc = nn.Sequential(
+            nn.Linear(in_channels, 32),
+            nn.ReLU(inplace=True),
+            nn.Linear(32, 2),
+        )
+
+    def forward(self, z: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+        """Returns (presence_logit [B], handedness_logit [B])."""
+        x = self.pool(z).flatten(1)  # [B, C]
+        out = self.fc(x)  # [B, 2]
+        return out[:, 0], out[:, 1]
+
+
 class HandSimCCNet(nn.Module):
-    """Backbone (stride 32) + SimCC head; train/eval on ``INPUT_SIZE``×``INPUT_SIZE`` RGB."""
+    """Backbone (stride 32) + SimCC head + presence/handedness head.
+
+    Train/eval on ``INPUT_SIZE``×``INPUT_SIZE`` RGB.
+    """
 
     def __init__(self, width_mult: float = 0.5) -> None:
         super().__init__()
         self.backbone = MobileNetV4ConvSmall(width_mult=width_mult)
         self.head = SimCCHead(self.backbone.out_channels)
+        self.aux_head = PresenceHandednessHead(self.backbone.out_channels)
 
-    def forward(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+    def forward(
+        self, x: torch.Tensor
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+        """Returns (lx, ly, presence_logit, handedness_logit)."""
+        z = self.backbone(x)
+        lx, ly = self.head(z)
+        presence, handedness = self.aux_head(z)
+        return lx, ly, presence, handedness
+
+    def forward_keypoints_only(
+        self, x: torch.Tensor
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Legacy forward: returns only (lx, ly). For backward compat with old checkpoints."""
         z = self.backbone(x)
         return self.head(z)
 
@@ -87,6 +158,26 @@ if __name__ == "__main__":
     lx, ly = head(feat)
     assert lx.shape == (B, NUM_JOINTS, NUM_BINS)
     assert ly.shape == (B, NUM_JOINTS, NUM_BINS)
+
+    # Test presence/handedness head
+    aux = PresenceHandednessHead(C)
+    pres, hand = aux(feat)
+    assert pres.shape == (B,)
+    assert hand.shape == (B,)
+    print(f"Presence logits: {pres}")
+    print(f"Handedness logits: {hand}")
+
+    # Test confidence from SimCC
+    conf = simcc_confidence(lx, ly)
+    assert conf.shape == (B,)
+    print(f"SimCC confidence: {conf}")
+
+    # Test full model
+    model = HandSimCCNet(width_mult=0.5)
+    inp = torch.randn(2, 3, INPUT_SIZE, INPUT_SIZE)
+    lx, ly, p, h = model(inp)
+    print(f"Full model: lx={lx.shape} ly={ly.shape} presence={p.shape} handedness={h.shape}")
+
     loss_fn = SimCCGaussianSoftCELoss()
     tgt = torch.rand(B, NUM_JOINTS, 2, device=feat.device, dtype=feat.dtype) * (INPUT_SIZE - 1)
     loss = loss_fn(lx, ly, tgt)

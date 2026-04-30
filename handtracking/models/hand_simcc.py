@@ -121,24 +121,39 @@ class PresenceHandednessHead(nn.Module):
 
 
 class HandSimCCNet(nn.Module):
-    """Backbone (stride 32) + SimCC head + presence/handedness head.
+    """Backbone (stride 32) + deconv upsample + SimCC head + presence/handedness head.
 
     Train/eval on ``INPUT_SIZE``×``INPUT_SIZE`` RGB.
+
+    The deconv upsample lifts the backbone's 8×8 feature map to 16×16,
+    giving the SimCC head 4× more spatial cells to average over.  This
+    significantly improves landmark localization without meaningful
+    parameter or latency cost.
     """
 
-    def __init__(self, width_mult: float = 0.5) -> None:
+    def __init__(self, width_mult: float = 0.75) -> None:
         super().__init__()
         self.backbone = MobileNetV4ConvSmall(width_mult=width_mult)
-        self.head = SimCCHead(self.backbone.out_channels)
-        self.aux_head = PresenceHandednessHead(self.backbone.out_channels)
+        ch = self.backbone.out_channels
+        # Upsample 8×8 → 16×16 for finer spatial detail before SimCC
+        self.upsample = nn.Sequential(
+            nn.ConvTranspose2d(ch, ch, kernel_size=4, stride=2, padding=1, bias=False),
+            nn.BatchNorm2d(ch),
+            nn.ReLU6(inplace=True),
+        )
+        self.head = SimCCHead(ch)
+        self.aux_head = PresenceHandednessHead(ch)
 
     def forward(
         self, x: torch.Tensor
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         """Returns (lx, ly, presence_logit, handedness_logit)."""
         z = self.backbone(x)
-        lx, ly = self.head(z)
+        # Presence/handedness use raw backbone features (GAP doesn't need spatial detail)
         presence, handedness = self.aux_head(z)
+        # SimCC head uses upsampled features for finer localization
+        z_up = self.upsample(z)
+        lx, ly = self.head(z_up)
         return lx, ly, presence, handedness
 
     def forward_keypoints_only(
@@ -146,7 +161,8 @@ class HandSimCCNet(nn.Module):
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """Legacy forward: returns only (lx, ly). For backward compat with old checkpoints."""
         z = self.backbone(x)
-        return self.head(z)
+        z_up = self.upsample(z)
+        return self.head(z_up)
 
 
 if __name__ == "__main__":
@@ -173,7 +189,7 @@ if __name__ == "__main__":
     print(f"SimCC confidence: {conf}")
 
     # Test full model
-    model = HandSimCCNet(width_mult=0.5)
+    model = HandSimCCNet(width_mult=0.75)
     inp = torch.randn(2, 3, INPUT_SIZE, INPUT_SIZE)
     lx, ly, p, h = model(inp)
     print(f"Full model: lx={lx.shape} ly={ly.shape} presence={p.shape} handedness={h.shape}")

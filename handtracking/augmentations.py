@@ -40,6 +40,31 @@ def rotate_180(image_bgr: np.ndarray, keypoints_xy: np.ndarray, p: float = 0.25)
     return out, kp
 
 
+def random_rotation(
+    image_bgr: np.ndarray,
+    keypoints_xy: np.ndarray,
+    max_angle: float = 30.0,
+    p: float = 0.5,
+) -> Tuple[np.ndarray, np.ndarray]:
+    """Random continuous rotation within ±max_angle degrees, with keypoint transform."""
+    import cv2
+
+    if random.random() >= p:
+        return image_bgr, keypoints_xy
+    h, w = image_bgr.shape[:2]
+    angle = random.uniform(-max_angle, max_angle)
+    M = cv2.getRotationMatrix2D((w / 2.0, h / 2.0), angle, 1.0)
+    img_out = cv2.warpAffine(image_bgr, M, (w, h), borderValue=(114, 114, 114))
+
+    kp = keypoints_xy.copy()
+    ones = np.ones((kp.shape[0], 1), dtype=np.float32)
+    kp_h = np.hstack([kp, ones])  # [J, 3]
+    kp_out = (M @ kp_h.T).T  # [J, 2]
+    kp_out[:, 0] = np.clip(kp_out[:, 0], 0, w - 1)
+    kp_out[:, 1] = np.clip(kp_out[:, 1], 0, h - 1)
+    return img_out, kp_out.astype(np.float32)
+
+
 def cutout(
     image_bgr: np.ndarray,
     keypoints_xy: np.ndarray,

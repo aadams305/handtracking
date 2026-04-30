@@ -226,7 +226,7 @@ def main() -> None:
         fcount = 0
         ie = max(1, args.infer_every)
         collapsed_warn = False
-        conf_threshold = 0.08  # below this, suppress keypoints (no hand)
+        conf_threshold = 0.02  # below this, suppress keypoints (no hand)
         if ort_session is None:
             import torch
 
@@ -237,12 +237,12 @@ def main() -> None:
                 out = ort_session.run(None, {ort_in_name: inp})
                 lx, ly = out[0], out[1]
                 xy = decode_simcc_soft_argmax_numpy(lx, ly)
+                # Always use distribution peakedness for confidence —
+                # the presence head was not trained with negative samples.
                 last_conf = simcc_confidence_numpy(lx, ly)
-                # Check for presence/handedness outputs from ONNX model
+                # Use handedness head if available (it IS trained properly)
                 if len(out) >= 4:
-                    pres_sigmoid = 1.0 / (1.0 + np.exp(-float(out[2].flat[0])))
                     hand_sigmoid = 1.0 / (1.0 + np.exp(-float(out[3].flat[0])))
-                    last_conf = pres_sigmoid  # use learned presence instead
                     last_hand_str = "Right" if hand_sigmoid > 0.5 else "Left"
                 else:
                     last_hand_str = ""
@@ -252,15 +252,14 @@ def main() -> None:
                 with torch.inference_mode():
                     out = net(inp)
                     if len(out) == 4:
-                        lx, ly, pres_logit, hand_logit = out
-                        last_conf = float(torch.sigmoid(pres_logit).item())
+                        lx, ly, _pres_logit, hand_logit = out
                         hand_p = float(torch.sigmoid(hand_logit).item())
                         last_hand_str = "Right" if hand_p > 0.5 else "Left"
                     else:
                         lx, ly = out
-                        from handtracking.models.hand_simcc import simcc_confidence
-                        last_conf = float(simcc_confidence(lx, ly).item())
                         last_hand_str = ""
+                    from handtracking.models.hand_simcc import simcc_confidence
+                    last_conf = float(simcc_confidence(lx, ly).mean().item())
                     xy = decode_torch(lx, ly)[0].cpu().numpy()
             last_kp = map_keypoints_lb_to_src(lb, xy.astype(np.float32, copy=False))
 

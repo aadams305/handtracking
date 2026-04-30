@@ -10,7 +10,7 @@ import numpy as np
 import torch
 from torch.utils.data import Dataset
 
-from handtracking.augmentations import cutout, motion_blur, rotate_180
+from handtracking.augmentations import cutout, motion_blur, random_rotation, rotate_180
 from handtracking.dataset_manifest import iter_manifest
 from handtracking.geometry import letterbox_image
 from handtracking.models.hand_simcc import INPUT_SIZE
@@ -146,8 +146,8 @@ class HandSimCCDataset(Dataset):
             if self._rng.random() < 0.5:
                 lb_img = motion_blur(lb_img)
             lb_img, kp = rotate_180(lb_img, kp, p=0.25)
+            lb_img, kp = random_rotation(lb_img, kp, max_angle=30.0, p=0.5)
 
-            # Random scale for handling different hand sizes
             lb_img, kp = random_scale_crop(lb_img, kp, p=0.4)
 
             # Horizontal flip — swaps handedness (left ↔ right)

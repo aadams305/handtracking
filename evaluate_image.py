@@ -73,7 +73,11 @@ def main():
     inp = torch.from_numpy(inp).unsqueeze(0)
     
     with torch.no_grad():
-        lx, ly = model(inp)
+        out = model(inp)
+        if len(out) == 4:
+            lx, ly, pres, hand = out
+        else:
+            lx, ly = out
         pred_coords = decode_simcc_soft_argmax(lx, ly, input_size=INPUT_SIZE)[0].numpy()
     
     # 4. Compute metrics if GT available

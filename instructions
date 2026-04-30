@@ -1,0 +1,12 @@
+1) here is what you can add from `training_recommendations.md`
+1a) most of tier 1 implementations but just stick with 100 epoches instead of going to 200.
+1b) all of tier 2 but note that i wont add in negatives for the next round of training but will for the one after that.
+1c) all of tier 3--use blazepalm for the palm detection for now; training data can be from freihand, rhd, and onehand10k.
+
+2) you are allowed to make additional changes to training setup if you think itll help you better observe changes for handtracking accuracy in training (eg log some datapoints)--only do it if it will actually be useful, otherwise it'll just be unused space in my drive.
+
+3) i noticed my model is running on the CPU. setup the pipeline for NPU so the model can run quicker.
+
+4) update the `colab.txt` to reflect all the changes we made so i can easily copy and paste the commands to train into colab. note that i will be running the distillation on this device before moving to collab to train on their GPU.
+
+5) run the training

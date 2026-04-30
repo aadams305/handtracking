@@ -11,3 +11,7 @@ tqdm>=4.66.0
 onnx>=1.15.0
 onnxsim>=0.4.33
 onnxruntime>=1.16.0
+
+# Phase 4: RKNN NPU (install on Orange Pi 5 / RK3588 only)
+# rknn-toolkit-lite2  # aarch64 (on-device inference)
+# rknn-toolkit2       # x86 host (model conversion)

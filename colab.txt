@@ -1,6 +1,6 @@
 # Google Colab: Full Edge Handtracking Pipeline v2
 # ================================================
-# Covers: multi-dataset distillation (FreiHAND + RHD + OneHand10K),
+# Covers: multi-dataset distillation (FreiHAND + RHD),
 # training (landmark + palm detector), ONNX export,
 # and prep for RKNN conversion on Orange Pi 5.
 #
@@ -47,30 +47,22 @@ print("Drive mounted; backup dir:", BACKUP)
 !cp /content/drive/MyDrive/datasets/RHD_v1-1.zip data/ || echo "RHD zip not found on Drive — upload to MyDrive/datasets/RHD_v1-1.zip"
 !unzip -q -o data/RHD_v1-1.zip -d data/rhd
 
-# --- OneHand10K (copy from Drive) ---
-# Upload OneHand10K.zip to MyDrive/datasets/ first, then:
-!mkdir -p data/onehand10k
-!cp /content/drive/MyDrive/datasets/OneHand10K.zip data/ || echo "OneHand10K zip not found on Drive — upload to MyDrive/datasets/OneHand10K.zip"
-!unzip -q -o data/OneHand10K.zip -d data/onehand10k
-
-# Verify all three
+# Verify both datasets
 !echo "--- FreiHAND ---" && ls data/freihand/ | head -5
 !echo "--- RHD ---" && ls data/rhd/ | head -5
-!echo "--- OneHand10K ---" && ls data/onehand10k/ | head -5
 
 !python3 -c "import torch; print('CUDA available:', torch.cuda.is_available())"
 
 # =============================================================================
 # Block 3 — Distill all 3 datasets with MediaPipe → unified manifest
 # =============================================================================
-# Runs MediaPipe teacher on FreiHAND + RHD + OneHand10K and produces one
+# Runs MediaPipe teacher on FreiHAND + RHD and produces one
 # combined JSONL manifest. This is the longest step (~30-60 min total).
 %cd /content/handtracking
 
 !PYTHONUNBUFFERED=1 python3 -u -m handtracking.distill_multi \
   --freihand data/freihand \
   --rhd data/rhd \
-  --onehand10k data/onehand10k \
   --out data/distilled/manifest.jsonl
 
 # Back up the manifest to Drive so you never have to re-distill

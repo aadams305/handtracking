@@ -96,13 +96,20 @@ def find_freihand_images(root: Path) -> list[Path]:
 def find_rhd_images(root: Path) -> list[Path]:
     """Find RHD (Rendered Handpose Dataset) images.
 
-    RHD structure: training/color/XXXXX.png and evaluation/color/XXXXX.png
+    Handles both flat and nested zip layouts:
+      data/rhd/training/color/*.png            (flat)
+      data/rhd/RHD_published_v2/training/color/*.png  (nested from zip)
     """
     paths: list[Path] = []
-    for split in ("training", "evaluation"):
-        color_dir = root / split / "color"
-        if color_dir.is_dir():
-            paths.extend(sorted(color_dir.glob("*.png")))
+    candidates = [root]
+    for child in root.iterdir():
+        if child.is_dir() and "rhd" in child.name.lower():
+            candidates.append(child)
+    for base in candidates:
+        for split in ("training", "evaluation"):
+            color_dir = base / split / "color"
+            if color_dir.is_dir():
+                paths.extend(sorted(color_dir.glob("*.png")))
     if not paths:
         for d in (root, root / "color"):
             if d.is_dir():

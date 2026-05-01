@@ -5,10 +5,9 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "handtracking"
 version = "0.1.0"
-description = "10-point hand tracking (MobileNetV4 + SimCC)"
+description = "21-point hand tracking (RTMPose-M + SimCC, edge deployment)"
 requires-python = ">=3.10"
 dependencies = [
-  "mediapipe>=0.10.14",
   "opencv-python-headless>=4.8.0",
   "numpy>=1.24.0",
   "torch>=2.1.0",
@@ -18,6 +17,7 @@ dependencies = [
   "onnx>=1.15.0",
   "onnxsim>=0.4.33",
   "onnxruntime>=1.16.0",
+  "scipy>=1.10.0",
 ]
 
 [tool.setuptools.packages.find]

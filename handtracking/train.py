@@ -1,5 +1,8 @@
-"""
-Training loop: cosine annealing LR with warmup, gradient clipping, EMA, checkpointing.
+"""Training loop for RTMPose-M hand landmark model.
+
+Features: cosine annealing LR with warmup, gradient clipping, EMA,
+differential learning rates (backbone vs head), KLDiscretLoss,
+MPJPE evaluation, checkpointing with resume support.
 """
 
 from __future__ import annotations
@@ -15,18 +18,21 @@ import torch.nn as nn
 from torch.optim import AdamW
 from torch.utils.data import DataLoader
 
-from handtracking.dataset import HandSimCCDataset
-from handtracking.losses import SimCCGaussianSoftCELoss
-from handtracking.models.hand_simcc import HandSimCCNet, decode_simcc_soft_argmax
-from handtracking.qat_wrapper import QATSimCCWrapper, apply_qat_prepare
+from handtracking.dataset_native import build_native_dataset
+from handtracking.losses import KLDiscretLoss
+from handtracking.models.rtmpose_hand import (
+    INPUT_SIZE,
+    NUM_BINS,
+    SIMCC_SPLIT_RATIO,
+    RTMPoseHand,
+    decode_simcc,
+)
 
 
 class ModelEMA:
     """Exponential Moving Average of model parameters.
 
-    Maintains a shadow copy of model weights updated as:
-        shadow = decay * shadow + (1 - decay) * current
-    After training, use ``ema.module`` for inference/export (smoother weights).
+    Maintains a shadow copy updated as:  shadow = decay * shadow + (1 - decay) * current
     """
 
     def __init__(self, model: nn.Module, decay: float = 0.999) -> None:
@@ -97,10 +103,7 @@ class CosineWarmupScheduler:
 def compute_mpjpe(
     model: nn.Module, loader: DataLoader, device: torch.device
 ) -> dict[str, float]:
-    """Evaluate MPJPE (px) on the loader using the model in eval mode.
-
-    Returns dict with 'mpjpe', 'mpjpe_tips', per-joint errors 'j0'..'j20', and 'max_joint_err'.
-    """
+    """Evaluate MPJPE (px) using RTMPose 512-bin SimCC decode."""
     from handtracking.losses import FINGERTIP_INDICES
 
     model.eval()
@@ -108,9 +111,8 @@ def compute_mpjpe(
     n = 0
     for batch in loader:
         x, y = batch[0].to(device), batch[1].to(device)
-        out = model(x)
-        lx, ly = out[0], out[1]
-        pred = decode_simcc_soft_argmax(lx, ly)  # [B, J, 2]
+        pred_x, pred_y = model(x)
+        pred = decode_simcc(pred_x, pred_y)  # [B, J, 2]
         per_joint = (pred - y).norm(dim=-1)  # [B, J]
         if errs_sum is None:
             errs_sum = per_joint.sum(dim=0)
@@ -136,7 +138,7 @@ def compute_mpjpe(
 def train_epoch(
     model: nn.Module,
     loader: DataLoader,
-    loss_fn: SimCCGaussianSoftCELoss,
+    loss_fn: KLDiscretLoss,
     opt: torch.optim.Optimizer,
     device: torch.device,
     grad_clip: float = 1.0,
@@ -146,26 +148,11 @@ def train_epoch(
     total = 0.0
     n = 0
     for batch in loader:
-        if len(batch) == 4:
-            x, y, has_hand, hand_label = batch
-            has_hand = has_hand.to(device)
-            hand_label = hand_label.to(device)
-        else:
-            x, y = batch
-            has_hand = None
-            hand_label = None
-
-        x = x.to(device)
-        y = y.to(device)
+        x, y = batch[0].to(device), batch[1].to(device)
         opt.zero_grad(set_to_none=True)
 
-        out = model(x)
-        if len(out) == 4:
-            lx, ly, pres_logit, hand_logit = out
-            loss = loss_fn(lx, ly, y, pres_logit, hand_logit, has_hand, hand_label)
-        else:
-            lx, ly = out
-            loss = loss_fn(lx, ly, y)
+        pred_x, pred_y = model(x)
+        loss = loss_fn(pred_x, pred_y, y)
 
         loss.backward()
         if grad_clip > 0:
@@ -181,82 +168,107 @@ def train_epoch(
 
 
 def main() -> None:
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--manifest", type=Path, default=Path("data/distilled/manifest.jsonl"))
+    ap = argparse.ArgumentParser(description="Train RTMPose-M hand landmark model")
+    # Data
+    ap.add_argument("--freihand", type=str, default=None, help="FreiHAND dataset root")
+    ap.add_argument("--rhd", type=str, default=None, help="RHD dataset root")
+    ap.add_argument("--manifest", type=Path, default=None,
+                    help="Legacy JSONL manifest (for old MobileNetV4 pipeline)")
+    # Training
     ap.add_argument("--epochs", type=int, default=100)
-    ap.add_argument("--batch-size", type=int, default=32)
-    ap.add_argument("--lr", type=float, default=3e-4)
-    ap.add_argument("--warmup-epochs", type=int, default=5, help="Linear LR warmup epochs")
-    ap.add_argument("--grad-clip", type=float, default=1.0, help="Gradient clipping max norm")
-    ap.add_argument("--coord-loss-weight", type=float, default=1.0, help="Weight for coordinate L1 auxiliary loss")
-    ap.add_argument("--sigma-bins", type=float, default=0.75, help="Gaussian sigma for bin targets (0.75 = tighter supervision)")
-    ap.add_argument("--qat", action="store_true", help="QAT for last --qat-epochs")
-    ap.add_argument("--qat-epochs", type=int, default=2)
-    ap.add_argument("--out", type=Path, default=Path("checkpoints/hand_simcc.pt"))
-    ap.add_argument("--width-mult", type=float, default=0.75)
+    ap.add_argument("--batch-size", type=int, default=64)
+    ap.add_argument("--lr", type=float, default=5e-4, help="Head learning rate")
+    ap.add_argument("--backbone-lr-scale", type=float, default=0.1,
+                    help="Backbone LR = lr * backbone_lr_scale (differential LR)")
+    ap.add_argument("--warmup-epochs", type=int, default=10, help="Linear LR warmup epochs")
+    ap.add_argument("--grad-clip", type=float, default=1.0)
+    ap.add_argument("--weight-decay", type=float, default=0.05)
+    # Loss
+    ap.add_argument("--sigma", type=float, default=6.0, help="Gaussian sigma for KL soft targets")
+    ap.add_argument("--coord-loss-weight", type=float, default=1.0)
+    # Model
+    ap.add_argument("--pretrained", type=str, default=None,
+                    help="Path to converted mmpose pretrained weights (.pt)")
+    ap.add_argument("--out", type=Path, default=Path("checkpoints/rtmpose_hand.pt"))
     ap.add_argument("--resume", action="store_true", help="Resume from latest checkpoint")
-    ap.add_argument("--num-workers", type=int, default=4, help="DataLoader workers")
+    # Infra
+    ap.add_argument("--num-workers", type=int, default=4)
     ap.add_argument("--ema-decay", type=float, default=0.999, help="EMA decay (0 to disable)")
-    ap.add_argument("--eval-every", type=int, default=5, help="Compute MPJPE metrics every N epochs")
+    ap.add_argument("--eval-every", type=int, default=5)
     args = ap.parse_args()
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Using device: {device}", flush=True)
 
-    ds = HandSimCCDataset(args.manifest, augment=True)
+    # --- Dataset ---
+    if args.freihand or args.rhd:
+        ds = build_native_dataset(args.freihand, args.rhd, augment=True)
+        ds_eval = build_native_dataset(args.freihand, args.rhd, augment=False)
+    elif args.manifest:
+        from handtracking.dataset import HandSimCCDataset
+        ds = HandSimCCDataset(args.manifest, augment=True)
+        ds_eval = HandSimCCDataset(args.manifest, augment=False)
+    else:
+        raise SystemExit("Provide --freihand/--rhd for native labels, or --manifest for legacy.")
+
     if len(ds) == 0:
-        raise SystemExit("Empty manifest; run distill_freihand first.")
-    ds_eval = HandSimCCDataset(args.manifest, augment=False)
-    print(f"Dataset: {len(ds)} samples", flush=True)
+        raise SystemExit("Empty dataset.")
+    print(f"Dataset: {len(ds)} training samples", flush=True)
 
     loader = DataLoader(
-        ds,
-        batch_size=args.batch_size,
-        shuffle=True,
-        num_workers=args.num_workers,
-        pin_memory=device.type == "cuda",
-        drop_last=True,
+        ds, batch_size=args.batch_size, shuffle=True,
+        num_workers=args.num_workers, pin_memory=device.type == "cuda", drop_last=True,
     )
     eval_loader = DataLoader(
-        ds_eval,
-        batch_size=args.batch_size,
-        shuffle=False,
-        num_workers=args.num_workers,
-        pin_memory=device.type == "cuda",
-        drop_last=False,
+        ds_eval, batch_size=args.batch_size, shuffle=False,
+        num_workers=args.num_workers, pin_memory=device.type == "cuda", drop_last=False,
     )
 
-    base = HandSimCCNet(width_mult=args.width_mult).to(device)
-    loss_fn = SimCCGaussianSoftCELoss(
-        sigma_bins=args.sigma_bins,
+    # --- Model ---
+    model = RTMPoseHand().to(device)
+    if args.pretrained:
+        sd = torch.load(args.pretrained, map_location=device, weights_only=True)
+        result = model.load_state_dict(sd, strict=False)
+        print(f"Loaded pretrained: missing={len(result.missing_keys)}, "
+              f"unexpected={len(result.unexpected_keys)}", flush=True)
+
+    n_params = sum(p.numel() for p in model.parameters())
+    print(f"Model parameters: {n_params:,}", flush=True)
+
+    # --- Loss ---
+    loss_fn = KLDiscretLoss(
+        input_size=INPUT_SIZE,
+        num_bins=NUM_BINS,
+        split_ratio=SIMCC_SPLIT_RATIO,
+        sigma=args.sigma,
         coord_loss_weight=args.coord_loss_weight,
     ).to(device)
 
-    n_params = sum(p.numel() for p in base.parameters())
-    print(f"Model parameters: {n_params:,}", flush=True)
+    # --- Optimizer with differential LR ---
+    backbone_params = list(model.backbone.parameters())
+    head_params = list(model.head.parameters())
+    backbone_lr = args.lr * args.backbone_lr_scale
+    param_groups = [
+        {"params": backbone_params, "lr": backbone_lr, "name": "backbone"},
+        {"params": head_params, "lr": args.lr, "name": "head"},
+    ]
+    opt = AdamW(param_groups, weight_decay=args.weight_decay)
+    sched = CosineWarmupScheduler(opt, warmup_epochs=args.warmup_epochs, total_epochs=args.epochs)
+    print(f"Optimizer: backbone_lr={backbone_lr:.2e}, head_lr={args.lr:.2e}", flush=True)
 
-    fp_epochs = args.epochs - args.qat_epochs if args.qat else args.epochs
-    if fp_epochs < 0:
-        raise SystemExit("--epochs must be >= --qat-epochs when --qat")
-
-    opt = AdamW(base.parameters(), lr=args.lr, weight_decay=1e-4)
-    sched = CosineWarmupScheduler(opt, warmup_epochs=args.warmup_epochs, total_epochs=fp_epochs)
-
+    # --- EMA ---
     ema: ModelEMA | None = None
     if args.ema_decay > 0:
-        ema = ModelEMA(base, decay=args.ema_decay)
+        ema = ModelEMA(model, decay=args.ema_decay)
         print(f"EMA enabled (decay={args.ema_decay})", flush=True)
 
+    # --- Resume ---
     latest_path = args.out.with_name(args.out.stem + "_latest.pt")
     start_epoch = 0
-
     if args.resume and latest_path.exists():
         print(f"Resuming from {latest_path} ...", flush=True)
-        try:
-            checkpoint = torch.load(latest_path, map_location=device, weights_only=False)
-        except TypeError:
-            checkpoint = torch.load(latest_path, map_location=device)
-        base.load_state_dict(checkpoint["model"])
+        checkpoint = torch.load(latest_path, map_location=device, weights_only=False)
+        model.load_state_dict(checkpoint["model"])
         opt.load_state_dict(checkpoint["optimizer"])
         sched.load_state_dict(checkpoint["scheduler"])
         start_epoch = checkpoint.get("epoch", 0) + 1
@@ -264,26 +276,28 @@ def main() -> None:
             ema.load_state_dict(checkpoint["ema"])
         print(f"Resumed at epoch {start_epoch}", flush=True)
 
+    # --- Training ---
     best_loss = float("inf")
     best_mpjpe = float("inf")
     t_start = time.time()
 
-    for epoch in range(start_epoch, fp_epochs):
+    for epoch in range(start_epoch, args.epochs):
         t0 = time.time()
-        loss = train_epoch(base, loader, loss_fn, opt, device, grad_clip=args.grad_clip, ema=ema)
+        loss = train_epoch(model, loader, loss_fn, opt, device, grad_clip=args.grad_clip, ema=ema)
         sched.step()
-        lr = sched.get_last_lr()[0]
+        lrs = sched.get_last_lr()
         dt = time.time() - t0
         marker = " *best*" if loss < best_loss else ""
-        log_line = f"epoch {epoch+1}/{args.epochs} (fp32) loss={loss:.6f} lr={lr:.6f} time={dt:.1f}s{marker}"
+        log_line = (f"epoch {epoch+1}/{args.epochs} loss={loss:.6f} "
+                    f"bb_lr={lrs[0]:.2e} head_lr={lrs[1]:.2e} time={dt:.1f}s{marker}")
 
-        # Periodic MPJPE evaluation
         eval_metrics: dict[str, float] | None = None
-        if args.eval_every > 0 and ((epoch + 1) % args.eval_every == 0 or epoch + 1 == fp_epochs):
-            eval_model = ema.module if ema is not None else base
+        if args.eval_every > 0 and ((epoch + 1) % args.eval_every == 0 or epoch + 1 == args.epochs):
+            eval_model = ema.module if ema is not None else model
             eval_metrics = compute_mpjpe(eval_model, eval_loader, device)
-            mpjpe_str = f"  MPJPE={eval_metrics['mpjpe']:.2f}px tips={eval_metrics['mpjpe_tips']:.2f}px worst_j={eval_metrics['max_joint_err']:.2f}px"
-            log_line += mpjpe_str
+            log_line += (f"  MPJPE={eval_metrics['mpjpe']:.2f}px "
+                         f"tips={eval_metrics['mpjpe_tips']:.2f}px "
+                         f"worst={eval_metrics['max_joint_err']:.2f}px")
             if eval_metrics["mpjpe"] < best_mpjpe:
                 best_mpjpe = eval_metrics["mpjpe"]
                 log_line += " *best_mpjpe*"
@@ -292,13 +306,12 @@ def main() -> None:
 
         args.out.parent.mkdir(parents=True, exist_ok=True)
         save_dict = {
-            "model": base.state_dict(),
+            "model": model.state_dict(),
             "optimizer": opt.state_dict(),
             "scheduler": sched.state_dict(),
             "epoch": epoch,
             "loss": loss,
-            "width_mult": args.width_mult,
-            "qat": False,
+            "arch": "rtmpose_hand",
         }
         if ema is not None:
             save_dict["ema"] = ema.state_dict()
@@ -308,9 +321,8 @@ def main() -> None:
             best_loss = loss
             best_path = args.out.with_name(args.out.stem + "_best.pt")
             save_best = {
-                "model": (ema.module if ema else base).state_dict(),
-                "width_mult": args.width_mult,
-                "qat": False,
+                "model": (ema.module if ema else model).state_dict(),
+                "arch": "rtmpose_hand",
                 "loss": loss,
             }
             if eval_metrics:
@@ -318,40 +330,16 @@ def main() -> None:
             torch.save(save_best, best_path)
 
     total_time = time.time() - t_start
-    print(f"Training complete in {total_time/60:.1f} min. Best loss={best_loss:.6f}, best MPJPE={best_mpjpe:.2f}px", flush=True)
+    print(f"\nTraining complete in {total_time/60:.1f} min", flush=True)
+    print(f"Best loss={best_loss:.6f}, best MPJPE={best_mpjpe:.2f}px", flush=True)
 
-    # For final export, prefer EMA weights
-    if ema is not None:
-        model: nn.Module = ema.module.cpu()
-    else:
-        model = base.cpu()
-
-    if args.qat and args.qat_epochs > 0:
-        fp32_path = args.out.with_suffix(".fp32.pt")
-        torch.save(
-            {"model": model.state_dict(), "width_mult": args.width_mult, "qat": False},
-            fp32_path,
-        )
-        print(f"saved FP32 weights for ONNX export: {fp32_path}")
-        model = QATSimCCWrapper(base.cpu()).to(device)
-        apply_qat_prepare(model)
-        opt = AdamW(model.parameters(), lr=args.lr * 0.1, weight_decay=1e-4)
-        sched_qat = CosineWarmupScheduler(opt, warmup_epochs=0, total_epochs=args.qat_epochs)
-        for epoch in range(args.qat_epochs):
-            loss = train_epoch(model, loader, loss_fn, opt, device, grad_clip=args.grad_clip)
-            sched_qat.step()
-            print(
-                f"epoch {fp_epochs + epoch + 1}/{args.epochs} (qat) loss={loss:.6f} lr={sched_qat.get_last_lr()[0]:.6f}"
-            )
-        model.eval()
-        model = torch.ao.quantization.convert(model.cpu(), inplace=False)
-
+    final_model = (ema.module if ema else model).cpu()
     args.out.parent.mkdir(parents=True, exist_ok=True)
     torch.save(
-        {"model": model.state_dict(), "width_mult": args.width_mult, "qat": bool(args.qat)},
+        {"model": final_model.state_dict(), "arch": "rtmpose_hand"},
         args.out,
     )
-    print(f"saved {args.out}")
+    print(f"Saved final model: {args.out}")
 
 
 if __name__ == "__main__":

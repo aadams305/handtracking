@@ -4,16 +4,13 @@ Requires rknn-toolkit2 (pip install rknn-toolkit2 on x86 host, or
 rknn-toolkit-lite2 on the Orange Pi itself).
 
 Two models to convert:
-  1. SimCC landmark model:  models/hand_simcc.onnx → models/hand_simcc.rknn
-  2. Palm detector:         models/palm_det.onnx   → models/palm_det.rknn
+  1. RTMPose landmark model:  models/rtmpose_hand.onnx → models/rtmpose_hand.rknn
+  2. Palm detector:           models/palm_det.onnx     → models/palm_det.rknn
 
 Usage:
-    python export_rknn.py --model landmark --onnx models/hand_simcc.onnx --out models/hand_simcc.rknn
-    python export_rknn.py --model palm     --onnx models/palm_det.onnx   --out models/palm_det.rknn
+    python export_rknn.py --model landmark --onnx models/rtmpose_hand.onnx --out models/rtmpose_hand.rknn
+    python export_rknn.py --model palm     --onnx models/palm_det.onnx     --out models/palm_det.rknn
     python export_rknn.py --model all
-
-On the Orange Pi 5 (aarch64), use rknn-toolkit-lite2 instead of rknn-toolkit2.
-This script auto-detects which is available.
 """
 
 from __future__ import annotations
@@ -22,8 +19,8 @@ import argparse
 import sys
 from pathlib import Path
 
-IMAGENET_MEAN = [0.485 * 255, 0.456 * 255, 0.406 * 255]
-IMAGENET_STD = [0.229 * 255, 0.224 * 255, 0.225 * 255]
+RTMPOSE_MEAN = [123.675, 116.28, 103.53]
+RTMPOSE_STD = [58.395, 57.12, 57.375]
 
 
 def convert_onnx_to_rknn(
@@ -51,8 +48,8 @@ def convert_onnx_to_rknn(
 
     print(f"Configuring RKNN for {target_platform}...", flush=True)
     rknn.config(
-        mean_values=[IMAGENET_MEAN],
-        std_values=[IMAGENET_STD],
+        mean_values=[RTMPOSE_MEAN],
+        std_values=[RTMPOSE_STD],
         target_platform=target_platform,
         quantized_algorithm="normal",
         quantized_method="channel",
@@ -84,7 +81,7 @@ def convert_onnx_to_rknn(
         sys.exit(1)
 
     rknn.release()
-    print(f"Successfully converted: {onnx_path} → {rknn_path}")
+    print(f"Successfully converted: {onnx_path} -> {rknn_path}")
 
 
 def generate_calibration_dataset(
@@ -92,8 +89,8 @@ def generate_calibration_dataset(
     output_txt: str,
     max_images: int = 100,
 ) -> None:
-    """Generate a calibration dataset text file (list of image paths) for RKNN quantization."""
-    from pathlib import Path
+    """Generate a calibration dataset text file for RKNN INT8 quantization."""
+    import json
     import random
 
     manifest = Path(manifest_path)
@@ -107,7 +104,6 @@ def generate_calibration_dataset(
             line = line.strip()
             if not line:
                 continue
-            import json
             d = json.loads(line)
             paths.append(d["image_path"])
 
@@ -127,27 +123,24 @@ def main() -> None:
         "--model", choices=("landmark", "palm", "all"), default="landmark",
         help="Which model to convert",
     )
-    ap.add_argument("--onnx", type=Path, default=None, help="Input ONNX path (auto-set for --model all)")
-    ap.add_argument("--out", type=Path, default=None, help="Output RKNN path (auto-set for --model all)")
-    ap.add_argument("--target", default="rk3588", help="Target platform (rk3588, rk3566, etc.)")
+    ap.add_argument("--onnx", type=Path, default=None)
+    ap.add_argument("--out", type=Path, default=None)
+    ap.add_argument("--target", default="rk3588")
     ap.add_argument("--quantize", action="store_true", help="Enable INT8 quantization")
-    ap.add_argument("--dataset", type=str, default=None, help="Calibration dataset txt for quantization")
-    ap.add_argument("--manifest", type=Path, default=Path("data/distilled/manifest.jsonl"),
-                     help="Manifest for auto-generating calibration dataset")
-    ap.add_argument("--gen-calib", action="store_true", help="Generate calibration dataset from manifest")
+    ap.add_argument("--dataset", type=str, default=None, help="Calibration dataset txt")
+    ap.add_argument("--manifest", type=Path, default=None,
+                    help="Manifest for auto-generating calibration dataset")
+    ap.add_argument("--gen-calib", action="store_true")
     args = ap.parse_args()
 
-    if args.gen_calib:
-        generate_calibration_dataset(
-            str(args.manifest),
-            "data/rknn_calibration.txt",
-        )
+    if args.gen_calib and args.manifest:
+        generate_calibration_dataset(str(args.manifest), "data/rknn_calibration.txt")
         if args.dataset is None:
             args.dataset = "data/rknn_calibration.txt"
 
     if args.model == "all":
         models = [
-            ("landmark", Path("models/hand_simcc.onnx"), Path("models/hand_simcc.rknn"), 256),
+            ("landmark", Path("models/rtmpose_hand.onnx"), Path("models/rtmpose_hand.rknn"), 256),
             ("palm", Path("models/palm_det.onnx"), Path("models/palm_det.rknn"), 192),
         ]
         for name, onnx_p, rknn_p, size in models:
@@ -157,14 +150,13 @@ def main() -> None:
             rknn_p.parent.mkdir(parents=True, exist_ok=True)
             convert_onnx_to_rknn(
                 str(onnx_p), str(rknn_p), size,
-                quantize=args.quantize,
-                dataset_txt=args.dataset,
+                quantize=args.quantize, dataset_txt=args.dataset,
                 target_platform=args.target,
             )
     else:
         if args.model == "landmark":
-            onnx_p = args.onnx or Path("models/hand_simcc.onnx")
-            rknn_p = args.out or Path("models/hand_simcc.rknn")
+            onnx_p = args.onnx or Path("models/rtmpose_hand.onnx")
+            rknn_p = args.out or Path("models/rtmpose_hand.rknn")
             size = 256
         else:
             onnx_p = args.onnx or Path("models/palm_det.onnx")
@@ -176,8 +168,7 @@ def main() -> None:
         rknn_p.parent.mkdir(parents=True, exist_ok=True)
         convert_onnx_to_rknn(
             str(onnx_p), str(rknn_p), size,
-            quantize=args.quantize,
-            dataset_txt=args.dataset,
+            quantize=args.quantize, dataset_txt=args.dataset,
             target_platform=args.target,
         )
 

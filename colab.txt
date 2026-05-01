@@ -1,17 +1,18 @@
-# Google Colab: Full Edge Handtracking Pipeline v2
+# Google Colab: RTMPose-M Hand Landmark Pipeline
 # ================================================
-# Covers: multi-dataset distillation (FreiHAND + RHD),
-# training (landmark + palm detector), ONNX export,
-# and prep for RKNN conversion on Orange Pi 5.
+# Fine-tune RTMPose-M (CSPNeXt + RTMCCHead, 512-bin SimCC) on
+# FreiHAND + RHD native labels, export to ONNX, prep for RKNN.
 #
-# Architecture: MobileNetV4ConvSmall (width_mult=0.75) + SimCC + EMA
-# Two-stage: BlazePalm detection → crop → SimCC landmark regression
+# Architecture: RTMPose-M (13.8M params, 256x256 input, 512 SimCC bins)
+# Pre-trained: mmpose Hand5 checkpoint (FreiHAND+RHD+OneHand10K+COCO-WB+Halpe)
+# Data: FreiHAND training_xyz.json + training_K.json, RHD anno_*.mat
+# No MediaPipe distillation — native annotations only.
 #
 # Tips
 #   - Runtime → Change runtime type → GPU (T4 or better).
 #   - Paste each "Block" into its own Colab cell.
 #   - %%bash cells MUST be alone in their cell (no Python above/below).
-#   - Add --resume to Block 5/5b commands if Colab disconnects mid-training.
+#   - Add --resume to Block 4 command if Colab disconnects mid-training.
 #
 # =============================================================================
 # Block 1 — Mount Drive and create backup folder
@@ -21,12 +22,12 @@ import os
 
 drive.mount("/content/drive")
 
-BACKUP = "/content/drive/MyDrive/handtracking8"
+BACKUP = "/content/drive/MyDrive/handtracking9"
 os.makedirs(BACKUP, exist_ok=True)
 print("Drive mounted; backup dir:", BACKUP)
 
 # =============================================================================
-# Block 2 — Clone repo, install deps, download/copy all 3 datasets
+# Block 2 — Clone repo, install deps, download/copy datasets
 # =============================================================================
 !rm -rf /content/handtracking
 
@@ -34,144 +35,111 @@ print("Drive mounted; backup dir:", BACKUP)
 %cd /content/handtracking
 
 !pip install -q -e . --no-deps
-!pip install -q mediapipe opencv-python-headless numpy tqdm onnx onnxruntime onnxsim Pillow torchvision
+!pip install -q opencv-python-headless numpy tqdm onnx onnxruntime onnxsim Pillow torchvision scipy
 
-# --- FreiHAND (direct download, ~3.6 GB zip) ---
+# --- FreiHAND (direct download — training images + annotations) ---
 !wget -nc https://lmb.informatik.uni-freiburg.de/data/freihand/FreiHAND_pub_v2.zip
 !mkdir -p data/freihand
 !unzip -q -o FreiHAND_pub_v2.zip -d data/freihand
 
+# --- FreiHAND eval annotations (for training_xyz.json and training_K.json) ---
+# The training annotations are included in the main zip
+!ls data/freihand/training_xyz.json data/freihand/training_K.json 2>/dev/null \
+  || echo "Annotations should be in data/freihand/"
+
 # --- RHD (copy from Drive) ---
 # Upload RHD_v1-1.zip to MyDrive/datasets/ first, then:
 !mkdir -p data/rhd
-!cp /content/drive/MyDrive/datasets/RHD_v1-1.zip data/ || echo "RHD zip not found on Drive — upload to MyDrive/datasets/RHD_v1-1.zip"
+!cp /content/drive/MyDrive/datasets/RHD_v1-1.zip data/ || echo "RHD zip not found — upload to MyDrive/datasets/RHD_v1-1.zip"
 !unzip -q -o data/RHD_v1-1.zip -d data/rhd
 
-# Verify both datasets
+# Verify datasets
 !echo "--- FreiHAND ---" && ls data/freihand/ | head -5
 !echo "--- RHD ---" && ls data/rhd/ | head -5
 
 !python3 -c "import torch; print('CUDA available:', torch.cuda.is_available())"
 
 # =============================================================================
-# Block 3 — Distill all 3 datasets with MediaPipe → unified manifest
-# =============================================================================
-# Runs MediaPipe teacher on FreiHAND + RHD and produces one
-# combined JSONL manifest. This is the longest step (~30-60 min total).
-%cd /content/handtracking
-
-!PYTHONUNBUFFERED=1 python3 -u -m handtracking.distill_multi \
-  --freihand data/freihand \
-  --rhd data/rhd \
-  --out data/distilled/manifest.jsonl
-
-# Back up the manifest to Drive so you never have to re-distill
-!cp data/distilled/manifest.jsonl /content/drive/MyDrive/handtracking8/manifest_multi.jsonl
-!wc -l data/distilled/manifest.jsonl
-print("Multi-dataset manifest distilled and backed up to Drive.")
-
-# =============================================================================
-# Block 4 — Sanity check: model shapes + param count
+# Block 3 — Download and convert mmpose pre-trained weights
 # =============================================================================
 %cd /content/handtracking
-import sys
-sys.path.insert(0, "/content/handtracking")
+!mkdir -p checkpoints
 
-import torch
-from handtracking.models.hand_simcc import HandSimCCNet, INPUT_SIZE, NUM_BINS, NUM_JOINTS
-
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-print("Using device:", device)
-
-m = HandSimCCNet(width_mult=0.75).eval().to(device)
-x = torch.randn(1, 3, INPUT_SIZE, INPUT_SIZE, device=device)
-with torch.inference_mode():
-    lx, ly, pres, hand = m(x)
-assert lx.shape == (1, NUM_JOINTS, NUM_BINS), lx.shape
-assert ly.shape == (1, NUM_JOINTS, NUM_BINS), ly.shape
-
-n_params = sum(p.numel() for p in m.parameters())
-print(f"OK: lx/ly={tuple(lx.shape)}, params={n_params:,}")
-
-from handtracking.models.palm_detector import BlazePalmDetector, PALM_INPUT_SIZE
-pm = BlazePalmDetector(width_mult=0.5).eval().to(device)
-px = torch.randn(1, 3, PALM_INPUT_SIZE, PALM_INPUT_SIZE, device=device)
-with torch.inference_mode():
-    boxes, scores = pm(px)
-pn = sum(p.numel() for p in pm.parameters())
-print(f"Palm detector: boxes={tuple(boxes.shape)}, scores={tuple(scores.shape)}, params={pn:,}")
+!python3 -m handtracking.load_mmpose_weights --out checkpoints/rtmpose_hand_pretrained.pt
 
 # =============================================================================
-# Block 5 — Train landmark model (100 epochs)
+# Block 4 — Fine-tune RTMPose-M on FreiHAND + RHD native labels (100 epochs)
 # =============================================================================
-# Key settings (from training_recommendations.md Recommended Training Configuration):
-#   --width-mult 0.75       96-channel features (was 64 at 0.5)
-#   --sigma-bins 0.75       tighter Gaussian targets for sub-pixel precision (was 1.0)
-#   --coord-loss-weight 1.0 stronger L1 coordinate supervision (was 0.5)
-#   --batch-size 64         larger batches for stable gradients (was 32)
-#   --lr 5e-4               scaled with batch size (linear scaling rule)
-#   --warmup-epochs 10      longer warmup for larger batches
-#   --ema-decay 0.999       Exponential Moving Average for smoother final weights
-#   --eval-every 5          compute MPJPE diagnostics every 5 epochs
-#   --epochs 100            capped at 100 (system_context.md requirement)
+# Key settings:
+#   --pretrained: Start from mmpose Hand5 pre-trained weights
+#   --backbone-lr-scale 0.1: Backbone LR = 5e-5 (pre-trained, lower to avoid forgetting)
+#   --lr 5e-4: Head LR (higher, learning new task-specific weights)
+#   --sigma 6.0: Gaussian sigma for KL soft targets
+#   --coord-loss-weight 1.0: L1 coordinate auxiliary loss
+#   --batch-size 64: Larger batches for stable gradients
+#   --warmup-epochs 10: Longer warmup for differential LR
+#   --ema-decay 0.999: EMA for smoother final weights
+#   --eval-every 5: MPJPE evaluation every 5 epochs
+#   --epochs 100: Capped at 100 epochs
 #
 # First run: omit --resume. After disconnect: add --resume to continue.
-# If you hit CUDA OOM with batch_size 64, fall back to --batch-size 32 --lr 3e-4.
+# If CUDA OOM with batch_size 64, fall back to --batch-size 32 --lr 3e-4.
 %cd /content/handtracking
 !mkdir -p checkpoints
 
 !PYTHONUNBUFFERED=1 python3 -u -m handtracking.train \
-  --manifest data/distilled/manifest.jsonl \
+  --freihand data/freihand \
+  --rhd data/rhd \
+  --pretrained checkpoints/rtmpose_hand_pretrained.pt \
   --epochs 100 \
   --batch-size 64 \
   --lr 5e-4 \
+  --backbone-lr-scale 0.1 \
   --warmup-epochs 10 \
-  --sigma-bins 0.75 \
+  --sigma 6.0 \
   --coord-loss-weight 1.0 \
-  --width-mult 0.75 \
   --ema-decay 0.999 \
   --eval-every 5 \
   --num-workers 2 \
-  --out checkpoints/hand_simcc.pt
+  --out checkpoints/rtmpose_hand.pt
 
 # =============================================================================
-# Block 5b — Train palm detector (60 epochs, for two-stage pipeline)
-# =============================================================================
-%cd /content/handtracking
-
-!PYTHONUNBUFFERED=1 python3 -u -m handtracking.train_palm_detector \
-  --manifest data/distilled/manifest.jsonl \
-  --epochs 60 \
-  --batch-size 64 \
-  --lr 1e-3 \
-  --out checkpoints/palm_det.pt
-
-# =============================================================================
-# Block 5c — Export both models to ONNX
+# Block 5 — Export to ONNX
 # =============================================================================
 %cd /content/handtracking
 !mkdir -p models
 
 !python3 -m handtracking.export_onnx \
-  --checkpoint checkpoints/hand_simcc.pt \
-  --out models/hand_simcc.onnx
-
-!python3 -m handtracking.export_palm_onnx \
-  --checkpoint checkpoints/palm_det.pt \
-  --out models/palm_det.onnx
+  --checkpoint checkpoints/rtmpose_hand.pt \
+  --out models/rtmpose_hand.onnx
 
 !ls -lh models/*.onnx
 
 # =============================================================================
-# Block 6 — Copy everything back to Drive
+# Block 6 — Quick ONNX sanity check
 # =============================================================================
 %cd /content/handtracking
-!cp -r checkpoints /content/drive/MyDrive/handtracking8/
-!cp -r models /content/drive/MyDrive/handtracking8/
-print("Checkpoints + ONNX models saved to Google Drive!")
+import numpy as np
+
+try:
+    import onnxruntime as ort
+    sess = ort.InferenceSession("models/rtmpose_hand.onnx", providers=["CPUExecutionProvider"])
+    dummy = np.random.randn(1, 3, 256, 256).astype(np.float32)
+    out = sess.run(None, {"input": dummy})
+    print(f"ONNX OK: simcc_x={out[0].shape}, simcc_y={out[1].shape}")
+except Exception as e:
+    print(f"ONNX check failed: {e}")
 
 # =============================================================================
-# Block 7 — (On Orange Pi 5 only) RKNN conversion & NPU inference
+# Block 7 — Copy everything back to Drive
+# =============================================================================
+%cd /content/handtracking
+!cp -r checkpoints /content/drive/MyDrive/handtracking9/
+!cp -r models /content/drive/MyDrive/handtracking9/
+print("Checkpoints + ONNX model saved to Google Drive!")
+
+# =============================================================================
+# Block 8 — (On Orange Pi 5 only) RKNN conversion & NPU inference
 # =============================================================================
 # These commands run on the Orange Pi 5 (RK3588), NOT in Colab.
 # After downloading models/ from Drive to your Orange Pi:
@@ -180,16 +148,16 @@ print("Checkpoints + ONNX models saved to Google Drive!")
 #   pip install rknn-toolkit-lite2
 #
 # --- Convert ONNX → RKNN ---
-#   python3 export_rknn.py --model all
+#   python3 export_rknn.py --model landmark
 #   # Or with INT8 quantization (needs calibration images):
-#   python3 export_rknn.py --model all --quantize --gen-calib --manifest data/distilled/manifest.jsonl
+#   python3 export_rknn.py --model landmark --quantize --dataset data/rknn_calibration.txt
 #
 # --- Live camera inference on NPU ---
 #   # Single-stage (landmark only):
-#   python3 camera_rknn.py --landmark-rknn models/hand_simcc.rknn
+#   python3 camera_rknn.py --landmark-rknn models/rtmpose_hand.rknn
 #
 #   # Two-stage (palm detection + landmarks):
-#   python3 camera_rknn.py --palm-rknn models/palm_det.rknn --landmark-rknn models/hand_simcc.rknn
+#   python3 camera_rknn.py --palm-rknn models/palm_det.rknn --landmark-rknn models/rtmpose_hand.rknn
 #
 #   # Use all 3 NPU cores for max throughput:
-#   python3 camera_rknn.py --landmark-rknn models/hand_simcc.rknn --core-mask 7
+#   python3 camera_rknn.py --landmark-rknn models/rtmpose_hand.rknn --core-mask 7

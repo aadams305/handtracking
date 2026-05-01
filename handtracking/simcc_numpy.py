@@ -1,26 +1,44 @@
-"""NumPy SimCC decode + NCHW input (matches training / PyTorch) for ONNX Runtime."""
+"""NumPy SimCC decode + preprocessing for ONNX Runtime / RKNN inference.
+
+Supports both:
+  - Legacy 256-bin (1:1 pixel-to-bin) with ImageNet normalisation
+  - RTMPose 512-bin (split_ratio=2.0) with pixel-space mean/std
+"""
 
 from __future__ import annotations
 
 import numpy as np
 
-from handtracking.models.hand_simcc import INPUT_SIZE, NUM_BINS
+from handtracking.models.rtmpose_hand import (
+    INPUT_SIZE,
+    MEAN as RTMPOSE_MEAN,
+    NUM_BINS,
+    SIMCC_SPLIT_RATIO,
+    STD as RTMPOSE_STD,
+)
 from handtracking.topology import NUM_HAND_JOINTS
 
 NUM_JOINTS = NUM_HAND_JOINTS
 
-# Cached for live decode (avoid reallocating bins / mean / std every frame)
-_BIN_CACHE: dict[tuple[int, int], np.ndarray] = {}
+_BIN_CACHE: dict[tuple[int, float], np.ndarray] = {}
+_RTMPOSE_CHW: tuple[np.ndarray, np.ndarray] | None = None
 _IMAGENET_CHW: tuple[np.ndarray, np.ndarray] | None = None
 
 
-def _bins_f32(num_bins: int, input_size: float) -> np.ndarray:
-    key = (num_bins, int(round(float(input_size) * 1000)))
+def _bins_f32(num_bins: int, split_ratio: float) -> np.ndarray:
+    key = (num_bins, split_ratio)
     if key not in _BIN_CACHE:
-        _BIN_CACHE[key] = np.arange(num_bins, dtype=np.float32) * (
-            np.float32(input_size) / np.float32(num_bins)
-        )
+        _BIN_CACHE[key] = np.arange(num_bins, dtype=np.float32) / np.float32(split_ratio)
     return _BIN_CACHE[key]
+
+
+def _rtmpose_mean_std() -> tuple[np.ndarray, np.ndarray]:
+    global _RTMPOSE_CHW
+    if _RTMPOSE_CHW is None:
+        mean = np.array(RTMPOSE_MEAN, dtype=np.float32).reshape(3, 1, 1)
+        std = np.array(RTMPOSE_STD, dtype=np.float32).reshape(3, 1, 1)
+        _RTMPOSE_CHW = (mean, std)
+    return _RTMPOSE_CHW
 
 
 def _imagenet_mean_std() -> tuple[np.ndarray, np.ndarray]:
@@ -41,40 +59,32 @@ def softmax(x: np.ndarray, axis: int = -1) -> np.ndarray:
 def decode_simcc_soft_argmax_numpy(
     lx: np.ndarray,
     ly: np.ndarray,
-    input_size: float = float(INPUT_SIZE),
-    num_bins: int = NUM_BINS,
+    split_ratio: float = SIMCC_SPLIT_RATIO,
 ) -> np.ndarray:
-    """
-    lx, ly: (J, num_bins) or (1, J, num_bins) float32 logits -> (J, 2) pixel coords in letterbox.
+    """Decode SimCC logits to pixel coords.
+
+    Args:
+        lx, ly: [J, num_bins] or [1, J, num_bins] logits.
+        split_ratio: SimCC split ratio (2.0 for RTMPose 512-bin, 1.0 for legacy 256-bin).
+
+    Returns:
+        [J, 2] pixel coordinates in letterbox space.
     """
     if lx.ndim == 3:
-        lx = lx[0]
-        ly = ly[0]
-    bins = _bins_f32(num_bins, float(input_size))
-    lx32 = np.asarray(lx, dtype=np.float32)
-    ly32 = np.asarray(ly, dtype=np.float32)
-    px = softmax(lx32, axis=-1)
-    py = softmax(ly32, axis=-1)
+        lx, ly = lx[0], ly[0]
+    num_bins = lx.shape[-1]
+    bins = _bins_f32(num_bins, split_ratio)
+    px = softmax(lx.astype(np.float32), axis=-1)
+    py = softmax(ly.astype(np.float32), axis=-1)
     x_coord = (px * bins[None, :]).sum(axis=-1)
     y_coord = (py * bins[None, :]).sum(axis=-1)
     return np.stack([x_coord, y_coord], axis=-1)
 
 
-def simcc_confidence_numpy(
-    lx: np.ndarray,
-    ly: np.ndarray,
-) -> float:
-    """Compute confidence from SimCC logit peakedness (numpy version).
-
-    Returns a float in roughly [0, 1]. High values mean the model is confident
-    about joint locations (peaked distributions). Low values mean near-uniform
-    distributions (likely no hand in frame).
-
-    Works on raw logits — no extra model head needed.
-    """
+def simcc_confidence_numpy(lx: np.ndarray, ly: np.ndarray) -> float:
+    """Peakedness-based confidence from SimCC logits (no extra head needed)."""
     if lx.ndim == 3:
-        lx = lx[0]
-        ly = ly[0]
+        lx, ly = lx[0], ly[0]
     px = softmax(lx, axis=-1)
     py = softmax(ly, axis=-1)
     peak_x = np.mean(np.max(px, axis=-1))
@@ -82,21 +92,32 @@ def simcc_confidence_numpy(
     num_bins = lx.shape[-1]
     raw = (peak_x + peak_y) / 2.0
     floor = 1.0 / num_bins
-    conf = float((raw - floor) / (1.0 - floor))
-    return max(0.0, min(1.0, conf))
+    return float(max(0.0, min(1.0, (raw - floor) / (1.0 - floor))))
+
+
+def bgr_letterbox_to_nchw_rtmpose(img_bgr: np.ndarray) -> np.ndarray:
+    """BGR uint8 [H, W, 3] -> float32 NCHW [1, 3, H, W] with RTMPose pixel-space normalisation."""
+    rgb = img_bgr[:, :, ::-1].astype(np.float32)
+    ch = np.transpose(rgb, (2, 0, 1))
+    mean, std = _rtmpose_mean_std()
+    return np.expand_dims((ch - mean) / std, 0)
 
 
 def bgr_letterbox_to_nchw_batch(img_bgr: np.ndarray) -> np.ndarray:
-    """uint8 BGR ``H×H`` letterbox (e.g. 256×256) -> float32 NCHW (1,3,H,H) ImageNet norm."""
+    """BGR uint8 -> float32 NCHW [1,3,H,H] with RTMPose normalisation (default for new model)."""
+    return bgr_letterbox_to_nchw_rtmpose(img_bgr)
+
+
+def bgr_letterbox_to_nchw_imagenet(img_bgr: np.ndarray) -> np.ndarray:
+    """BGR uint8 -> float32 NCHW [1,3,H,H] with ImageNet normalisation (legacy model)."""
     rgb = img_bgr[:, :, ::-1].astype(np.float32) * (1.0 / 255.0)
     ch = np.transpose(rgb, (2, 0, 1))
     mean, std = _imagenet_mean_std()
-    x = (ch - mean) / std
-    return np.expand_dims(x, 0)
+    return np.expand_dims((ch - mean) / std, 0)
 
 
 def keypoints_collapsed(kp_full: np.ndarray, frame_shape: tuple[int, int, ...]) -> bool:
-    """True if all joints sit in a tight blob (untrained / degenerate student)."""
+    """True if all joints sit in a tight blob (untrained / degenerate model)."""
     h, w = frame_shape[0], frame_shape[1]
     if kp_full.size == 0:
         return True

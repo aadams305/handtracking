@@ -29,7 +29,7 @@ if str(_REPO) not in sys.path:
     sys.path.insert(0, str(_REPO))
 
 from handtracking.geometry import letterbox_image, map_keypoints_lb_to_src
-from handtracking.models.hand_simcc import INPUT_SIZE
+from handtracking.models.rtmpose_hand import INPUT_SIZE, MEAN as RTMPOSE_MEAN, STD as RTMPOSE_STD
 from handtracking.models.palm_detector import (
     PALM_INPUT_SIZE,
     PalmDetection,
@@ -44,8 +44,8 @@ from handtracking.simcc_numpy import (
 )
 from handtracking.viz import draw_hand_21
 
-IMAGENET_MEAN = np.array([0.485, 0.456, 0.406], dtype=np.float32)
-IMAGENET_STD = np.array([0.229, 0.224, 0.225], dtype=np.float32)
+PIXEL_MEAN = np.array(RTMPOSE_MEAN, dtype=np.float32)
+PIXEL_STD = np.array(RTMPOSE_STD, dtype=np.float32)
 
 
 def preprocess_for_rknn(image_bgr: np.ndarray, target_size: int) -> np.ndarray:
@@ -60,10 +60,10 @@ def preprocess_for_rknn(image_bgr: np.ndarray, target_size: int) -> np.ndarray:
 
 
 def preprocess_float(image_bgr: np.ndarray, target_size: int) -> tuple[np.ndarray, object]:
-    """Preprocess for float-mode RKNN (if model was exported without quantization)."""
+    """Preprocess for float-mode RKNN: RTMPose pixel-space normalisation."""
     lb_img, lb = letterbox_image(image_bgr, target_size)
-    rgb = cv2.cvtColor(lb_img, cv2.COLOR_BGR2RGB).astype(np.float32) / 255.0
-    normalized = (rgb - IMAGENET_MEAN) / IMAGENET_STD
+    rgb = cv2.cvtColor(lb_img, cv2.COLOR_BGR2RGB).astype(np.float32)
+    normalized = (rgb - PIXEL_MEAN) / PIXEL_STD
     nhwc = np.expand_dims(normalized, axis=0)
     return nhwc, lb
 
@@ -179,7 +179,7 @@ def decode_palm_detections(
 
 def main() -> None:
     ap = argparse.ArgumentParser(description="RKNN NPU camera inference on Orange Pi 5 (RK3588)")
-    ap.add_argument("--landmark-rknn", type=Path, default=Path("models/hand_simcc.rknn"))
+    ap.add_argument("--landmark-rknn", type=Path, default=Path("models/rtmpose_hand.rknn"))
     ap.add_argument("--palm-rknn", type=Path, default=None,
                      help="Palm detector RKNN (omit for single-stage)")
     ap.add_argument("--camera", type=int, default=0)
@@ -256,8 +256,8 @@ def main() -> None:
                 if args.uint8_input:
                     lm_inp = np.expand_dims(cv2.cvtColor(crop, cv2.COLOR_BGR2RGB), axis=0)
                 else:
-                    rgb = cv2.cvtColor(crop, cv2.COLOR_BGR2RGB).astype(np.float32) / 255.0
-                    normalized = (rgb - IMAGENET_MEAN) / IMAGENET_STD
+                    rgb = cv2.cvtColor(crop, cv2.COLOR_BGR2RGB).astype(np.float32)
+                    normalized = (rgb - PIXEL_MEAN) / PIXEL_STD
                     lm_inp = np.expand_dims(normalized, axis=0)
 
                 lm_out = landmark_npu.run([lm_inp])

@@ -12,3 +12,9 @@ data/distilled/
 cpp/build/
 .venv/
 venv/
+
+# Dataset zips (large, download separately)
+FreiHAND_pub_v2.zip
+FreiHAND_pub_v2_eval.zip
+RHD_v1-1.zip
+*.rknn

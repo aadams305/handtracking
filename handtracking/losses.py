@@ -1,6 +1,9 @@
-"""SimCC training loss: soft cross-entropy against Gaussian 1D bin targets (X + Y),
-plus optional coordinate regression auxiliary loss for fingertip precision,
-plus presence (BCE) and handedness (BCE) losses."""
+"""SimCC training losses.
+
+Contains:
+- SimCCGaussianSoftCELoss: soft CE against Gaussian targets (original MobileNetV4 model)
+- KLDiscretLoss: KL-divergence loss for RTMPose SimCC (512-bin, split_ratio=2.0)
+"""
 
 from __future__ import annotations
 
@@ -127,5 +130,119 @@ class SimCCGaussianSoftCELoss(nn.Module):
                 h_label = handedness_label[known_mask]
                 hand_loss = F.binary_cross_entropy_with_logits(h_logit, h_label)
                 total = total + self.handedness_weight * hand_loss
+
+        return total
+
+
+# ---------------------------------------------------------------------------
+# KLDiscretLoss for RTMPose (512-bin SimCC with split_ratio=2.0)
+# ---------------------------------------------------------------------------
+
+def _label_to_soft_target(
+    target_px: torch.Tensor,
+    num_bins: int,
+    split_ratio: float,
+    sigma: float = 6.0,
+) -> torch.Tensor:
+    """Convert pixel coordinate to soft 1D label distribution.
+
+    Args:
+        target_px: [B, J] pixel coordinates in [0, input_size).
+        num_bins: Number of SimCC bins (e.g. 512).
+        split_ratio: SimCC oversampling ratio (e.g. 2.0).
+        sigma: Gaussian sigma in bin units.
+
+    Returns:
+        [B, J, num_bins] soft target distribution (log-softmax normalised).
+    """
+    mu = target_px * split_ratio  # map pixel to bin index
+    device, dtype = target_px.device, target_px.dtype
+    bins = torch.arange(num_bins, device=device, dtype=dtype)  # [num_bins]
+    diff = bins - mu.unsqueeze(-1)  # [B, J, num_bins]
+    logits = -0.5 * (diff / sigma) ** 2
+    return F.log_softmax(logits, dim=-1)
+
+
+class KLDiscretLoss(nn.Module):
+    """KL-divergence loss for RTMPose SimCC outputs.
+
+    Generates Gaussian soft targets from pixel keypoint coords, then computes
+    KL(soft_target || pred_softmax) per axis, with optional coordinate L1
+    auxiliary loss.
+
+    Args:
+        input_size: Spatial input resolution (256).
+        num_bins: Number of SimCC bins (512 for split_ratio=2.0).
+        split_ratio: SimCC oversampling factor (2.0).
+        sigma: Gaussian sigma for soft targets in bin units.
+        coord_loss_weight: Weight for auxiliary L1 coordinate loss.
+        tip_weight: Extra weight for fingertip joints in L1 loss.
+    """
+
+    def __init__(
+        self,
+        input_size: int = 256,
+        num_bins: int = 512,
+        split_ratio: float = 2.0,
+        sigma: float = 6.0,
+        coord_loss_weight: float = 1.0,
+        tip_weight: float = 2.0,
+    ) -> None:
+        super().__init__()
+        self.input_size = input_size
+        self.num_bins = num_bins
+        self.split_ratio = split_ratio
+        self.sigma = sigma
+        self.coord_loss_weight = coord_loss_weight
+        self.tip_weight = tip_weight
+
+    def forward(
+        self,
+        pred_x: torch.Tensor,
+        pred_y: torch.Tensor,
+        target_xy: torch.Tensor,
+    ) -> torch.Tensor:
+        """
+        Args:
+            pred_x: [B, J, num_bins] logits for x-axis.
+            pred_y: [B, J, num_bins] logits for y-axis.
+            target_xy: [B, J, 2] pixel coords in [0, input_size).
+
+        Returns:
+            Scalar loss.
+        """
+        tgt_x = target_xy[..., 0]  # [B, J]
+        tgt_y = target_xy[..., 1]  # [B, J]
+
+        log_qx = _label_to_soft_target(tgt_x, self.num_bins, self.split_ratio, self.sigma)
+        log_qy = _label_to_soft_target(tgt_y, self.num_bins, self.split_ratio, self.sigma)
+
+        log_px = F.log_softmax(pred_x, dim=-1)
+        log_py = F.log_softmax(pred_y, dim=-1)
+
+        # KL(q || p) = sum q * (log q - log p)
+        kl_x = (log_qx.exp() * (log_qx - log_px)).sum(dim=-1).mean()
+        kl_y = (log_qy.exp() * (log_qy - log_py)).sum(dim=-1).mean()
+        total = kl_x + kl_y
+
+        if self.coord_loss_weight > 0:
+            # Decode predictions to pixel coords
+            px = F.softmax(pred_x, dim=-1)
+            py = F.softmax(pred_y, dim=-1)
+            bins = torch.arange(self.num_bins, device=pred_x.device, dtype=pred_x.dtype)
+            bins = bins.unsqueeze(0).unsqueeze(0)
+            ex = (px * bins).sum(dim=-1) / self.split_ratio  # [B, J]
+            ey = (py * bins).sum(dim=-1) / self.split_ratio  # [B, J]
+            pred_coords = torch.stack((ex, ey), dim=-1)  # [B, J, 2]
+
+            l1 = (pred_coords - target_xy).abs()  # [B, J, 2]
+            B, J, _ = l1.shape
+            weight = torch.ones(J, device=l1.device, dtype=l1.dtype)
+            for tip_idx in FINGERTIP_INDICES:
+                if tip_idx < J:
+                    weight[tip_idx] = self.tip_weight
+            weight = weight / weight.mean()
+
+            total = total + self.coord_loss_weight * (l1 * weight.view(1, -1, 1)).mean()
 
         return total

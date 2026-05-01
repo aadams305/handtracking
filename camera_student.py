@@ -30,9 +30,8 @@ _REPO = Path(__file__).resolve().parent
 if str(_REPO) not in sys.path:
     sys.path.insert(0, str(_REPO))
 
-from handtracking.dataset import normalize_bgr_tensor
 from handtracking.geometry import letterbox_image, map_keypoints_lb_to_src
-from handtracking.models.hand_simcc import INPUT_SIZE
+from handtracking.models.rtmpose_hand import INPUT_SIZE
 from handtracking.simcc_numpy import (
     bgr_letterbox_to_nchw_batch,
     decode_simcc_soft_argmax_numpy,
@@ -111,8 +110,8 @@ def main() -> None:
         default="onnx",
         help="ONNX Runtime or PyTorch only (no MediaPipe; no fallback if chosen backend is missing)",
     )
-    ap.add_argument("--checkpoint", type=Path, default=Path("checkpoints/hand_simcc.pt"))
-    ap.add_argument("--onnx", type=Path, default=Path("models/hand_simcc.onnx"))
+    ap.add_argument("--checkpoint", type=Path, default=Path("checkpoints/rtmpose_hand.pt"))
+    ap.add_argument("--onnx", type=Path, default=Path("models/rtmpose_hand.onnx"))
     ap.add_argument("--device", choices=("cpu", "cuda"), default="cpu")
     ap.add_argument(
         "--gpu",
@@ -190,11 +189,11 @@ def main() -> None:
         )
     else:
         import torch
-        from handtracking.models.hand_simcc import HandSimCCNet, decode_simcc_soft_argmax
+        from handtracking.models.rtmpose_hand import RTMPoseHand, decode_simcc
 
         if not args.checkpoint.is_file():
             raise SystemExit(f"Checkpoint not found: {args.checkpoint.resolve()}")
-        decode_torch = decode_simcc_soft_argmax
+        decode_torch = decode_simcc
         use_cuda = (args.gpu or args.device == "cuda") and torch.cuda.is_available()
         dev = torch.device("cuda" if use_cuda else "cpu")
         if args.gpu and not use_cuda:
@@ -206,14 +205,8 @@ def main() -> None:
             torch.set_float32_matmul_precision("high")
         except Exception:
             pass
-        try:
-            ckpt = torch.load(args.checkpoint, map_location="cpu", weights_only=False)
-        except TypeError:
-            ckpt = torch.load(args.checkpoint, map_location="cpu")
-        wm = float(ckpt.get("width_mult", 0.5))
-        if ckpt.get("qat"):
-            raise SystemExit("QAT checkpoint not supported; use FP32 hand_simcc.pt")
-        net = HandSimCCNet(width_mult=wm).eval()
+        ckpt = torch.load(args.checkpoint, map_location="cpu", weights_only=False)
+        net = RTMPoseHand().eval()
         net.load_state_dict(ckpt["model"], strict=False)
         net = net.to(dev)
         dummy = torch.randn(1, 3, INPUT_SIZE, INPUT_SIZE, device=dev)
@@ -279,19 +272,13 @@ def main() -> None:
                 last_hand_str = ""
         else:
             import torch
-            from handtracking.models.hand_simcc import simcc_confidence
+            from handtracking.dataset_native import normalize_rtmpose
+            from handtracking.models.rtmpose_hand import simcc_confidence
             assert net is not None and decode_torch is not None and dev is not None
-            inp = normalize_bgr_tensor(lb_img).unsqueeze(0).to(dev)
+            inp = normalize_rtmpose(lb_img).unsqueeze(0).to(dev)
             with torch.inference_mode():
-                out = net(inp)
-                if len(out) == 4:
-                    lx, ly, _pres_logit, hand_logit = out
-                    hand_p = float(torch.sigmoid(hand_logit).item())
-                    last_hand_str = "Right" if hand_p > 0.5 else "Left"
-                else:
-                    lx, ly = out
-                    last_hand_str = ""
-                # Always use simcc peakedness for confidence
+                lx, ly = net(inp)
+                last_hand_str = ""
                 last_conf = float(simcc_confidence(lx, ly).mean().item())
                 xy = decode_torch(lx, ly)[0].cpu().numpy()
         last_kp = map_keypoints_lb_to_src(lb, xy.astype(np.float32, copy=False))

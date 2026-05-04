@@ -188,7 +188,7 @@ def main() -> None:
     ap.add_argument("--fps", type=int, default=30)
     ap.add_argument("--core-mask", type=int, default=7,
                      help="NPU core mask: 1=core0, 2=core1, 4=core2, 7=all three")
-    ap.add_argument("--conf-threshold", type=float, default=0.02)
+    ap.add_argument("--conf-threshold", type=float, default=0.001)
     ap.add_argument("--palm-thresh", type=float, default=0.5)
     ap.add_argument("--max-hands", type=int, default=2)
     ap.add_argument("--preview-max-width", type=int, default=960)
@@ -238,10 +238,7 @@ def main() -> None:
         t0 = time.perf_counter()
 
         if two_stage and palm_npu is not None:
-            if args.uint8_input:
-                palm_inp, _ = preprocess_for_rknn(frame, PALM_INPUT_SIZE)
-            else:
-                palm_inp, _ = preprocess_float(frame, PALM_INPUT_SIZE)
+            palm_inp, _ = preprocess_for_rknn(frame, PALM_INPUT_SIZE)
 
             palm_out = palm_npu.run([palm_inp])
             palms = decode_palm_detections(
@@ -253,19 +250,14 @@ def main() -> None:
             vis = frame.copy()
             for det in palms:
                 crop, transform = crop_palm_region(frame, det, output_size=INPUT_SIZE)
-                if args.uint8_input:
-                    lm_inp = np.expand_dims(cv2.cvtColor(crop, cv2.COLOR_BGR2RGB), axis=0)
-                else:
-                    rgb = cv2.cvtColor(crop, cv2.COLOR_BGR2RGB).astype(np.float32)
-                    normalized = (rgb - PIXEL_MEAN) / PIXEL_STD
-                    lm_inp = np.expand_dims(normalized, axis=0)
+                lm_inp = np.expand_dims(cv2.cvtColor(crop, cv2.COLOR_BGR2RGB), axis=0)
 
                 lm_out = landmark_npu.run([lm_inp])
                 lx, ly = lm_out[0], lm_out[1]
                 conf = simcc_confidence_numpy(lx, ly)
 
                 if conf >= args.conf_threshold:
-                    xy = decode_simcc_soft_argmax_numpy(lx, ly)[0]
+                    xy = decode_simcc_soft_argmax_numpy(lx, ly)
                     kp_src = map_landmarks_to_source(xy, transform)
                     vis = draw_hand_21(vis, kp_src, radius=4, line_type=cv2.LINE_8)
 
@@ -277,19 +269,18 @@ def main() -> None:
                     cv2.putText(vis, label, (10, vis.shape[0] - 15),
                                 cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 200), 1, cv2.LINE_AA)
         else:
-            if args.uint8_input:
-                lm_inp, lb = preprocess_for_rknn(frame, INPUT_SIZE)
-            else:
-                lm_inp, lb = preprocess_float(frame, INPUT_SIZE)
+            lm_inp, lb = preprocess_for_rknn(frame, INPUT_SIZE)
 
             lm_out = landmark_npu.run([lm_inp])
             lx, ly = lm_out[0], lm_out[1]
             conf = simcc_confidence_numpy(lx, ly)
 
-            vis = frame
+            vis = frame.copy()
+            cv2.putText(vis, f"conf={conf:.4f}", (10, 30),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2, cv2.LINE_AA)
             if conf >= args.conf_threshold:
                 xy = decode_simcc_soft_argmax_numpy(lx, ly)
-                kp_src = map_keypoints_lb_to_src(lb, xy[0].astype(np.float32))
+                kp_src = map_keypoints_lb_to_src(lb, xy.astype(np.float32))
                 vis = draw_hand_21(frame, kp_src, radius=4, line_type=cv2.LINE_8)
 
                 handedness = ""

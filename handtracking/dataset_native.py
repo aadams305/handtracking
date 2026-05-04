@@ -164,48 +164,53 @@ class RHDDataset(Dataset):
 
     def _load_splits(self, splits: Sequence[str]) -> None:
         for split in splits:
-            anno_path = self.root / f"anno_{split}.pickle"
-            mat_path = self.root / f"anno_{split}.mat"
+            # RHD stores annotations in multiple possible locations:
+            #   root/anno_{split}.pickle          (flat layout)
+            #   root/{split}/anno_{split}.pickle  (inside split dir)
+            #   root/RHD_published_v2/{split}/anno_{split}.pickle  (nested zip)
+            search_dirs = [self.root, self.root / split]
+            for child in self.root.iterdir():
+                if child.is_dir():
+                    search_dirs.append(child)
+                    search_dirs.append(child / split)
 
-            if anno_path.exists():
-                self._load_pickle(split, anno_path)
-            elif mat_path.exists():
-                self._load_mat(split, mat_path)
-            else:
-                import scipy.io
-                search_dirs = [self.root]
-                for child in self.root.iterdir():
-                    if child.is_dir() and "rhd" in child.name.lower():
-                        search_dirs.append(child)
-
-                found = False
-                for d in search_dirs:
-                    for suffix in (".pickle", ".mat"):
-                        p = d / f"anno_{split}{suffix}"
-                        if p.exists():
-                            if suffix == ".pickle":
-                                self._load_pickle(split, p, d)
-                            else:
-                                self._load_mat(split, p, d)
-                            found = True
-                            break
-                    if found:
+            found = False
+            for d in search_dirs:
+                if not d.is_dir():
+                    continue
+                for suffix in (".pickle", ".mat"):
+                    p = d / f"anno_{split}{suffix}"
+                    if p.exists():
+                        base = d if (d / "color").is_dir() else d.parent if (d.parent / split / "color").is_dir() else d
+                        if suffix == ".pickle":
+                            self._load_pickle(split, p, base)
+                        else:
+                            self._load_mat(split, p, base)
+                        found = True
                         break
-                if not found:
-                    print(f"WARNING: RHD anno not found for split '{split}' under {self.root}")
+                if found:
+                    break
+            if not found:
+                print(f"WARNING: RHD anno not found for split '{split}' under {self.root}")
 
     def _find_color_dir(self, split: str, anno_parent: Path | None = None) -> Path | None:
         """Find the color image directory for a split."""
-        candidates = [self.root]
-        if anno_parent and anno_parent != self.root:
-            candidates.insert(0, anno_parent)
+        candidates = []
+        if anno_parent:
+            candidates.append(anno_parent)
+            if anno_parent.parent != self.root:
+                candidates.append(anno_parent.parent)
+        candidates.append(self.root)
         for child in self.root.iterdir():
-            if child.is_dir() and "rhd" in child.name.lower():
+            if child.is_dir():
                 candidates.append(child)
         for base in candidates:
             d = base / split / "color"
             if d.is_dir():
                 return d
+            d2 = base / "color"
+            if d2.is_dir():
+                return d2
         return None
 
     def _load_pickle(self, split: str, path: Path, base_dir: Path | None = None) -> None:

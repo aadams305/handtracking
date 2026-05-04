@@ -77,7 +77,7 @@ class ChannelAttention(nn.Module):
         self.act = nn.Hardsigmoid(inplace=True)
 
     def forward(self, x: Tensor) -> Tensor:
-        with torch.cuda.amp.autocast(enabled=False):
+        with torch.amp.autocast("cuda", enabled=False):
             out = self.global_avgpool(x)
         out = self.fc(out)
         out = self.act(out)
@@ -167,7 +167,7 @@ class SPPBottleneck(nn.Module):
 
     def forward(self, x: Tensor) -> Tensor:
         x = self.conv1(x)
-        with torch.cuda.amp.autocast(enabled=False):
+        with torch.amp.autocast("cuda", enabled=False):
             x = torch.cat([x] + [p(x) for p in self.poolings], dim=1)
         return self.conv2(x)
 

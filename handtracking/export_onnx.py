@@ -18,7 +18,7 @@ def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--checkpoint", type=Path, default=Path("checkpoints/rtmpose_hand.pt"))
     ap.add_argument("--out", type=Path, default=Path("models/rtmpose_hand.onnx"))
-    ap.add_argument("--opset", type=int, default=14)
+    ap.add_argument("--opset", type=int, default=18)
     args = ap.parse_args()
 
     ckpt = torch.load(args.checkpoint, map_location="cpu", weights_only=False)
@@ -30,11 +30,9 @@ def main() -> None:
     dummy = torch.randn(1, 3, INPUT_SIZE, INPUT_SIZE)
     args.out.parent.mkdir(parents=True, exist_ok=True)
 
-    traced_model = torch.jit.trace(model, dummy)
-
     torch.onnx.export(
-        traced_model,
-        dummy,
+        model,
+        (dummy,),
         str(args.out),
         input_names=["input"],
         output_names=["simcc_x", "simcc_y"],

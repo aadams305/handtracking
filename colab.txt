@@ -35,7 +35,7 @@ print("Drive mounted; backup dir:", BACKUP)
 %cd /content/handtracking
 
 !pip install -q -e . --no-deps
-!pip install -q opencv-python-headless numpy tqdm onnx onnxruntime onnxsim Pillow torchvision scipy
+!pip install -q opencv-python-headless numpy tqdm onnx onnxruntime onnxsim onnxscript Pillow torchvision scipy
 
 # --- FreiHAND (direct download — training images + annotations) ---
 !wget -nc https://lmb.informatik.uni-freiburg.de/data/freihand/FreiHAND_pub_v2.zip

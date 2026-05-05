@@ -1,18 +1,22 @@
-# Google Colab: RTMPose-M Hand Landmark Pipeline
-# ================================================
+# Google Colab: RTMPose-M Hand Landmark + YOLO11n Palm Detector Pipeline
+# ========================================================================
 # Fine-tune RTMPose-M (CSPNeXt + RTMCCHead, 512-bin SimCC) on
-# FreiHAND + RHD native labels, export to ONNX, prep for RKNN.
+# FreiHAND + RHD native labels, train YOLO11n palm detector,
+# export both to ONNX, prep for RKNN.
 #
-# Architecture: RTMPose-M (13.8M params, 256x256 input, 512 SimCC bins)
+# Architecture:
+#   - Landmark: RTMPose-M (13.8M params, 256x256 input, 512 SimCC bins)
+#   - Detector: YOLO11n-detect (single class "hand", 192x192 input)
 # Pre-trained: mmpose Hand5 checkpoint (FreiHAND+RHD+OneHand10K+COCO-WB+Halpe)
-# Data: FreiHAND training_xyz.json + training_K.json, RHD anno_*.mat
+# Data: FreiHAND training_xyz.json + training_K.json, RHD anno_*.pickle
 # No MediaPipe distillation — native annotations only.
 #
 # Tips
-#   - Runtime → Change runtime type → GPU (T4 or better).
+#   - Runtime → Change runtime type → A100 GPU (80GB VRAM).
 #   - Paste each "Block" into its own Colab cell.
 #   - %%bash cells MUST be alone in their cell (no Python above/below).
 #   - Add --resume to Block 4 command if Colab disconnects mid-training.
+#   - AMP (mixed precision) is enabled automatically when GPU is detected.
 #
 # =============================================================================
 # Block 1 — Mount Drive and create backup folder
@@ -35,7 +39,7 @@ print("Drive mounted; backup dir:", BACKUP)
 %cd /content/handtracking
 
 !pip install -q -e . --no-deps
-!pip install -q opencv-python-headless numpy tqdm onnx onnxruntime onnxsim onnxscript Pillow torchvision scipy
+!pip install -q opencv-python-headless numpy tqdm onnx onnxruntime onnxsim onnxscript Pillow torchvision scipy ultralytics
 
 # --- FreiHAND (direct download — training images + annotations) ---
 !wget -nc https://lmb.informatik.uni-freiburg.de/data/freihand/FreiHAND_pub_v2.zip
@@ -57,7 +61,7 @@ print("Drive mounted; backup dir:", BACKUP)
 !echo "--- FreiHAND ---" && ls data/freihand/ | head -5
 !echo "--- RHD ---" && ls data/rhd/ | head -5
 
-!python3 -c "import torch; print('CUDA available:', torch.cuda.is_available())"
+!python3 -c "import torch; print('CUDA:', torch.cuda.is_available(), '|', torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'N/A')"
 
 # =============================================================================
 # Block 3 — Download and convert mmpose pre-trained weights
@@ -68,22 +72,26 @@ print("Drive mounted; backup dir:", BACKUP)
 !python3 -m handtracking.load_mmpose_weights --out checkpoints/rtmpose_hand_pretrained.pt
 
 # =============================================================================
-# Block 4 — Fine-tune RTMPose-M on FreiHAND + RHD native labels (100 epochs)
+# Block 4 — Fine-tune RTMPose-M on FreiHAND + RHD native labels
 # =============================================================================
-# Key settings:
+# A100 settings:
+#   --batch-size 256: A100 80GB with AMP handles this easily
+#   --num-workers 8: More workers to keep GPU fed
+#   --accum-steps 1: No gradient accumulation needed at batch=256
+#   AMP is auto-enabled when CUDA is detected (GradScaler + autocast)
+#
+# Key training settings:
 #   --pretrained: Start from mmpose Hand5 pre-trained weights
-#   --backbone-lr-scale 0.1: Backbone LR = 5e-5 (pre-trained, lower to avoid forgetting)
+#   --backbone-lr-scale 0.1: Backbone LR = 5e-5 (fine-tuning, avoid forgetting)
 #   --lr 5e-4: Head LR (higher, learning new task-specific weights)
 #   --sigma 6.0: Gaussian sigma for KL soft targets
 #   --coord-loss-weight 1.0: L1 coordinate auxiliary loss
-#   --batch-size 64: Larger batches for stable gradients
 #   --warmup-epochs 10: Longer warmup for differential LR
-#   --ema-decay 0.999: EMA for smoother final weights
+#   --ema-decay 0.999: EMA for smoother final weights (used for export)
 #   --eval-every 5: MPJPE evaluation every 5 epochs
-#   --epochs 100: Capped at 100 epochs
+#   --epochs 300: Full training schedule with cosine annealing
 #
 # First run: omit --resume. After disconnect: add --resume to continue.
-# If CUDA OOM with batch_size 64, fall back to --batch-size 32 --lr 3e-4.
 %cd /content/handtracking
 !mkdir -p checkpoints
 
@@ -91,8 +99,8 @@ print("Drive mounted; backup dir:", BACKUP)
   --freihand data/freihand \
   --rhd data/rhd \
   --pretrained checkpoints/rtmpose_hand_pretrained.pt \
-  --epochs 100 \
-  --batch-size 64 \
+  --epochs 300 \
+  --batch-size 384 \
   --lr 5e-4 \
   --backbone-lr-scale 0.1 \
   --warmup-epochs 10 \
@@ -100,18 +108,20 @@ print("Drive mounted; backup dir:", BACKUP)
   --coord-loss-weight 1.0 \
   --ema-decay 0.999 \
   --eval-every 5 \
-  --num-workers 2 \
+  --num-workers 12 \
+  --accum-steps 1 \
   --out checkpoints/rtmpose_hand.pt
 
 # =============================================================================
-# Block 5 — Export to ONNX
+# Block 5 — Export RTMPose-M to ONNX (uses EMA weights automatically)
 # =============================================================================
 %cd /content/handtracking
 !mkdir -p models
 
 !python3 -m handtracking.export_onnx \
   --checkpoint checkpoints/rtmpose_hand.pt \
-  --out models/rtmpose_hand.onnx
+  --out models/rtmpose_hand.onnx \
+  --use-ema
 
 !ls -lh models/*.onnx
 
@@ -131,33 +141,83 @@ except Exception as e:
     print(f"ONNX check failed: {e}")
 
 # =============================================================================
-# Block 7 — Copy everything back to Drive
+# Block 7 — Train YOLO11n palm detector
+# =============================================================================
+# Generates YOLO-format dataset from FreiHAND + RHD keypoint annotations
+# (computes tight bbox around 21 joints, expands 20%) and trains YOLO11n-detect.
+#
+# Settings:
+#   --imgsz 192: Matches palm detector input size for RKNN deployment
+#   --epochs 100: Sufficient for single-class detection
+#   batch=-1 (auto): YOLO auto-selects optimal batch for available VRAM
+#   single_cls=True: Only one class ("hand")
+%cd /content/handtracking
+
+!PYTHONUNBUFFERED=1 python3 train_yolo_palm.py \
+  --freihand data/freihand \
+  --rhd data/rhd \
+  --output-dir data/yolo_palm \
+  --epochs 100 \
+  --imgsz 192
+
+# =============================================================================
+# Block 8 — Export YOLO11n to ONNX
+# =============================================================================
+%cd /content/handtracking
+!mkdir -p models
+
+!python3 export_yolo_palm.py \
+  --weights runs/detect/yolo_palm/weights/best.pt \
+  --out models/yolo_palm.onnx \
+  --imgsz 192
+
+!ls -lh models/yolo_palm.onnx
+
+# =============================================================================
+# Block 9 — Copy everything back to Drive
 # =============================================================================
 %cd /content/handtracking
 !cp -r checkpoints /content/drive/MyDrive/handtracking9/
 !cp -r models /content/drive/MyDrive/handtracking9/
-print("Checkpoints + ONNX model saved to Google Drive!")
+!cp -r runs/detect/yolo_palm/weights /content/drive/MyDrive/handtracking9/yolo_palm_weights/
+print("All models saved to Google Drive!")
+print("  - RTMPose landmark: models/rtmpose_hand.onnx")
+print("  - YOLO palm detector: models/yolo_palm.onnx")
 
 # =============================================================================
-# Block 8 — (On Orange Pi 5 only) RKNN conversion & NPU inference
+# Block 10 — (On Orange Pi 5 only) RKNN conversion & NPU inference
 # =============================================================================
 # These commands run on the Orange Pi 5 (RK3588), NOT in Colab.
 # After downloading models/ from Drive to your Orange Pi:
 #
-# --- Install rknn-toolkit-lite2 (aarch64) ---
-#   pip install rknn-toolkit-lite2
+# --- Update RKNN runtime (one-time, matches toolkit 2.3.2) ---
+#   bash update_rknn_runtime.sh
 #
-# --- Convert ONNX → RKNN ---
-#   python3 export_rknn.py --model landmark
-#   # Or with INT8 quantization (needs calibration images):
-#   python3 export_rknn.py --model landmark --quantize --dataset data/rknn_calibration.txt
+# --- Convert ONNX → RKNN (FP16 and INT8 for comparison) ---
+#   # Landmark model:
+#   python3 export_rknn.py --model landmark --precision both --dataset data/rknn_calibration.txt --benchmark
+#
+#   # YOLO palm detector (uses models/yolo_palm.onnx if present, else palm_det.onnx):
+#   python3 export_rknn.py --model palm --precision fp16
+#   # Explicit ONNX path:
+#   python3 export_rknn.py --model palm --onnx models/yolo_palm.onnx --precision fp16
+#   # Or with INT8 (needs YOLO calibration images):
+#   python3 export_rknn.py --model palm --precision int8 --dataset data/rknn_calibration.txt
 #
 # --- Live camera inference on NPU ---
-#   # Single-stage (landmark only):
+#   # Two-stage with YOLO detector (fully on NPU):
+#   python3 camera_twostage_npu.py --detector yolo --yolo-rknn models/yolo_palm.rknn
+#
+#   # Two-stage with MediaPipe detector (CPU detection + NPU landmarks):
+#   python3 camera_twostage_npu.py --detector mediapipe
+#
+#   # Single-stage (full frame → NPU landmark only):
 #   python3 camera_rknn.py --landmark-rknn models/rtmpose_hand.rknn
 #
-#   # Two-stage (palm detection + landmarks):
-#   python3 camera_rknn.py --palm-rknn models/palm_det.rknn --landmark-rknn models/rtmpose_hand.rknn
+#   # Disable smoothing/Kalman for raw output:
+#   python3 camera_twostage_npu.py --detector yolo --no-smooth --no-kalman
 #
-#   # Use all 3 NPU cores for max throughput:
-#   python3 camera_rknn.py --landmark-rknn models/rtmpose_hand.rknn --core-mask 7
+#   # Tune One-Euro filter for your use case:
+#   python3 camera_twostage_npu.py --smooth-min-cutoff 0.5 --smooth-beta 1.0 --smooth-d-cutoff 1.0
+#   # Reset smoothing/Kalman only after N frames with no hand in that slot (0 = every frame):
+#   python3 camera_twostage_npu.py --hand-lost-frames 8

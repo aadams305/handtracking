@@ -220,3 +220,17 @@ Replace or supplement SimCC with direct coordinate regression (a lightweight FC 
 ## Conclusion
 
 MediaPipe is currently far superior on real-world images due to its massive and diverse training data. RTMPose-M has the right architecture and speed profile for edge deployment but needs significantly more diverse training data and longer training to close the accuracy gap. The pipeline infrastructure (train → ONNX → RKNN → NPU live camera) is fully validated end-to-end and ready for a proper training campaign.
+
+## Reminders after new-dataset training completes
+
+Do these on the host that has the new checkpoints and on the Orange Pi after you copy artifacts over; nothing here requires waiting inside this repo.
+
+1. **Landmark ONNX → RKNN** — Export fresh ONNX with EMA (`python3 -m handtracking.export_onnx --checkpoint … --use-ema`), then on RK3588: `python3 export_rknn.py --model landmark --precision both --dataset data/rknn_calibration.txt` (regenerate `data/rknn_calibration.txt` from images that match the new domain if you rely on INT8).
+
+2. **FP16 vs INT8** — Run `export_rknn.py … --benchmark` again on-device and pick the better latency/accuracy tradeoff for the new models.
+
+3. **YOLO palm** — If you retrained `train_yolo_palm.py`, run `python3 export_yolo_palm.py --weights runs/detect/yolo_palm/weights/best.pt --out models/yolo_palm.onnx --imgsz 192 --rknn` (or `export_rknn.py --model palm --onnx models/yolo_palm.onnx`), copy `models/yolo_palm.rknn` to the Pi, and smoke-test `python3 camera_twostage_npu.py --detector yolo`.
+
+4. **RKNN runtime** — After toolkit upgrades, re-run `sudo bash update_rknn_runtime.sh` so `librknnrt` stays aligned with the compiler version you used.
+
+5. **Refresh this report** — Re-run `compare_mp_vs_rtmpose.py` (or your eval script) on `IMG_7271.jpeg` and similar captures from the new domain; update the metrics table and the “NPU Deployment Status” section so they match the new weights and two-stage options (MediaPipe vs YOLO detector).

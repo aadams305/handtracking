@@ -143,26 +143,43 @@ def train_epoch(
     device: torch.device,
     grad_clip: float = 1.0,
     ema: ModelEMA | None = None,
+    scaler: torch.amp.GradScaler | None = None,
+    accum_steps: int = 1,
 ) -> float:
     model.train()
     total = 0.0
     n = 0
-    for batch in loader:
-        x, y = batch[0].to(device), batch[1].to(device)
-        opt.zero_grad(set_to_none=True)
+    opt.zero_grad(set_to_none=True)
+    for step, batch in enumerate(loader):
+        x, y = batch[0].to(device, non_blocking=True), batch[1].to(device, non_blocking=True)
 
-        pred_x, pred_y = model(x)
-        loss = loss_fn(pred_x, pred_y, y)
+        with torch.amp.autocast("cuda", enabled=scaler is not None):
+            pred_x, pred_y = model(x)
+            loss = loss_fn(pred_x, pred_y, y)
+            loss = loss / accum_steps
 
-        loss.backward()
-        if grad_clip > 0:
-            torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
-        opt.step()
+        if scaler is not None:
+            scaler.scale(loss).backward()
+        else:
+            loss.backward()
 
-        if ema is not None:
-            ema.update(model)
+        if (step + 1) % accum_steps == 0:
+            if scaler is not None:
+                if grad_clip > 0:
+                    scaler.unscale_(opt)
+                    torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
+                scaler.step(opt)
+                scaler.update()
+            else:
+                if grad_clip > 0:
+                    torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
+                opt.step()
+            opt.zero_grad(set_to_none=True)
 
-        total += float(loss.item()) * x.size(0)
+            if ema is not None:
+                ema.update(model)
+
+        total += float(loss.item()) * accum_steps * x.size(0)
         n += x.size(0)
     return total / max(1, n)
 
@@ -176,13 +193,15 @@ def main() -> None:
                     help="Legacy JSONL manifest (for old MobileNetV4 pipeline)")
     # Training
     ap.add_argument("--epochs", type=int, default=100)
-    ap.add_argument("--batch-size", type=int, default=64)
+    ap.add_argument("--batch-size", type=int, default=256)
     ap.add_argument("--lr", type=float, default=5e-4, help="Head learning rate")
     ap.add_argument("--backbone-lr-scale", type=float, default=0.1,
                     help="Backbone LR = lr * backbone_lr_scale (differential LR)")
     ap.add_argument("--warmup-epochs", type=int, default=10, help="Linear LR warmup epochs")
     ap.add_argument("--grad-clip", type=float, default=1.0)
     ap.add_argument("--weight-decay", type=float, default=0.05)
+    ap.add_argument("--accum-steps", type=int, default=1,
+                    help="Gradient accumulation steps for effective larger batch")
     # Loss
     ap.add_argument("--sigma", type=float, default=6.0, help="Gaussian sigma for KL soft targets")
     ap.add_argument("--coord-loss-weight", type=float, default=1.0)
@@ -192,13 +211,20 @@ def main() -> None:
     ap.add_argument("--out", type=Path, default=Path("checkpoints/rtmpose_hand.pt"))
     ap.add_argument("--resume", action="store_true", help="Resume from latest checkpoint")
     # Infra
-    ap.add_argument("--num-workers", type=int, default=4)
+    ap.add_argument("--num-workers", type=int, default=8)
     ap.add_argument("--ema-decay", type=float, default=0.999, help="EMA decay (0 to disable)")
     ap.add_argument("--eval-every", type=int, default=5)
+    ap.add_argument("--no-amp", action="store_true", help="Disable automatic mixed precision")
     args = ap.parse_args()
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Using device: {device}", flush=True)
+
+    if device.type == "cuda":
+        torch.backends.cudnn.benchmark = True
+        gpu_name = torch.cuda.get_device_name(0)
+        gpu_mem = torch.cuda.get_device_properties(0).total_mem / 1024**3
+        print(f"GPU: {gpu_name} ({gpu_mem:.1f} GB)", flush=True)
 
     # --- Dataset ---
     if args.freihand or args.rhd:
@@ -276,6 +302,12 @@ def main() -> None:
             ema.load_state_dict(checkpoint["ema"])
         print(f"Resumed at epoch {start_epoch}", flush=True)
 
+    # --- AMP ---
+    use_amp = device.type == "cuda" and not args.no_amp
+    scaler = torch.amp.GradScaler("cuda") if use_amp else None
+    if use_amp:
+        print("AMP (mixed precision) enabled", flush=True)
+
     # --- Training ---
     best_loss = float("inf")
     best_mpjpe = float("inf")
@@ -283,7 +315,10 @@ def main() -> None:
 
     for epoch in range(start_epoch, args.epochs):
         t0 = time.time()
-        loss = train_epoch(model, loader, loss_fn, opt, device, grad_clip=args.grad_clip, ema=ema)
+        loss = train_epoch(
+            model, loader, loss_fn, opt, device,
+            grad_clip=args.grad_clip, ema=ema, scaler=scaler, accum_steps=args.accum_steps,
+        )
         sched.step()
         lrs = sched.get_last_lr()
         dt = time.time() - t0

@@ -18,6 +18,7 @@ dependencies = [
   "onnxsim>=0.4.33",
   "onnxruntime>=1.16.0",
   "scipy>=1.10.0",
+  "ultralytics>=8.3.0",
 ]
 
 [tool.setuptools.packages.find]
